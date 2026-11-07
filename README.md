@@ -34,11 +34,9 @@ Built for and tested against Jira Software 9.12.3 on Java 17 (compiled for Java 
 
 ## Build
 
-The host needs only Docker. Maven runs in `maven:3.9.9-eclipse-temurin-11` with the Atlassian public repository (`build/maven-settings.xml`) and a local repository in the Docker volume `jira-mfa-m2`:
+The host needs only Docker. Maven runs in `maven:3.9.9-eclipse-temurin-11` with the Atlassian public repository (`build/maven-settings.xml`) and a local repository in `~/.cache/jira-mfa-m2` (override with `MAVEN_CACHE`), which the script creates:
 
 ```bash
-docker volume create jira-mfa-m2
-docker run --rm -v jira-mfa-m2:/m2 alpine:3.20 chown -R "$(id -u):$(id -g)" /m2
 build/mvn.sh -B package          # runs the unit tests
 ls target/jira-mfa-plugin-*.jar
 ```
