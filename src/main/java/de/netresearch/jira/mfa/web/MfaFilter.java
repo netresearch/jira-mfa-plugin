@@ -68,7 +68,9 @@ public class MfaFilter implements Filter {
         try {
             user = mfa.env().currentUser();
         } catch (RuntimeException e) {
-            chain.doFilter(request, response);
+            // Fail closed, as below: without the user the second step cannot be checked.
+            LOG.error("MFA check could not determine the user on {}", req.getRequestURI(), e);
+            MfaServletSupport.json(resp, 503, "{\"errorMessages\":[\"Two-step verification is temporarily unavailable.\"]}");
             return;
         }
         if (user == null) {
@@ -114,15 +116,17 @@ public class MfaFilter implements Filter {
         AuthScheme scheme = RequestClassifier.scheme(req.getHeader("Authorization"));
         HttpSession session = req.getSession(false);
         if (scheme == AuthScheme.BASIC) {
-            // Seraph has already checked the password (a wrong one is answered 401 before this filter).
             boolean sameUser = user.getUsername().equalsIgnoreCase(basicUser(req.getHeader("Authorization")));
-            if (sameUser) {
-                return BasicAuthRule.allows(mfa.settings(), user.getUsername(), mfa.requirement(user))
-                        ? Decision.PASS : Decision.BASIC_BLOCKED;
+            if (sameUser && basicIdentifiesTheUser(req, session, user)) {
+                boolean allowed = BasicAuthRule.allows(mfa.settings(), user.getUsername(), mfa.requirement(user));
+                if (allowed && session != null) {
+                    session.setAttribute(S_BASIC_SESSION, user.getKey());
+                }
+                return allowed ? Decision.PASS : Decision.BASIC_BLOCKED;
             }
-            // a Basic header for someone else on top of a session: treat as a session request
+            // a Basic header for someone else, or on top of a browser session: treat as a session request
         }
-        if (MfaService.isVerified(session, user)) {
+        if (mfa.isVerified(session, user)) {
             return Decision.PASS;
         }
         if (RequestClassifier.isOpen(path) && !RequestClassifier.hasEncodedSeparators(req.getRequestURI())) {
@@ -150,6 +154,30 @@ public class MfaFilter implements Filter {
             default:
                 return Decision.ENROL;
         }
+    }
+
+    /** Session attribute: this session was established by a Basic request this filter let through. */
+    static final String S_BASIC_SESSION = "de.netresearch.jira.mfa.basicSession";
+    static final String REMEMBER_ME_COOKIE = "seraph.rememberme.cookie";
+
+    /**
+     * True when the user of this request can only have come from the Basic
+     * header, so Seraph checked its password. A session or a remember-me cookie
+     * may identify the user before Seraph looks at the header; then the header's
+     * password is not proven and a forged {@code user:anything} must not turn a
+     * session that never passed the second step into a Basic request. Sessions
+     * that a Basic request created (scripts keeping a cookie jar) stay Basic.
+     */
+    static boolean basicIdentifiesTheUser(HttpServletRequest req, HttpSession session, ApplicationUser user) {
+        javax.servlet.http.Cookie[] cookies = req.getCookies();
+        if (cookies != null) {
+            for (javax.servlet.http.Cookie c : cookies) {
+                if (REMEMBER_ME_COOKIE.equals(c.getName())) {
+                    return false;
+                }
+            }
+        }
+        return session == null || session.isNew() || user.getKey().equals(session.getAttribute(S_BASIC_SESSION));
     }
 
     static final String S_NONE_UNTIL = "de.netresearch.jira.mfa.noneUntil";

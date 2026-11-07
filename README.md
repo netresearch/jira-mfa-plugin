@@ -15,19 +15,19 @@ Built for Jira Software 9.12.3 (compiled for Java 11) and tested against it on J
 | Part | Implementation |
 |---|---|
 | Enforcement | Servlet filter module at `before-dispatch` on `/*`. At that point Seraph and the token filters have identified the user, so the plugin needs no change to Jira's `seraph-config.xml` (a custom Seraph authenticator would). |
-| Session state | A verified session carries the user key in a session attribute; the session ID is rotated on verification. A new session, including one created by the "remember me" cookie, must verify again (tested: a request with only the remember-me cookie is sent to the plugin's page). |
+| Session state | A verified session carries the user key and the time of verification in a session attribute; the session ID is rotated on verification. Removing a factor or an admin reset ends every other verified session of that user (the session that removed its own factor stays verified). A new session, including one created by the "remember me" cookie, must verify again (tested: a request with only the remember-me cookie is sent to the plugin's page). |
 | TOTP | Codes from [java-otp](https://github.com/jchambers/java-otp); one step of clock drift either way; a code from an already used step is rejected (replay). |
 | Passkeys | [Yubico java-webauthn-server](https://github.com/Yubico/java-webauthn-server) does all parsing and signature checks. Relying party ID = host of the Jira base URL (configurable), origin = base URL. ES256 and RS256. Non-discoverable credentials, user verification preferred. |
 | Storage | Active Objects tables `AO_..._USER_STATE`, `..._PASSKEY`, `..._RECOVERY_CODE` (namespace `NRMFA`). TOTP secrets are AES-256-GCM encrypted. |
-| Encryption key | `$JIRA_HOME/data/mfa/secret.key`, created on first use with mode 600. **It is part of the backup.** Without it, every stored TOTP secret is unreadable and all TOTP users must be reset. |
+| Encryption key | `$JIRA_HOME/data/mfa/secret.key`, created on first use with mode 600. **It is part of the backup.** Without it, every stored TOTP secret is unreadable. The plugin then does not create a new key while TOTP secrets exist: TOTP codes are refused (logged as an error), recovery codes and passkeys still work, and TOTP users without either must be reset. Restoring the file brings TOTP back. |
 | Recovery codes | 10 codes of 10 characters (50 bits each), stored as salted PBKDF2-HMAC-SHA256 hashes, deleted when used. Issued automatically with the first factor. |
-| Rate limiting | 5 failed second-step attempts within 15 minutes lock the second step for 15 minutes (both configurable). In memory, per node; a restart clears it. |
+| Rate limiting | 5 second-step attempts within 15 minutes that do not succeed lock the second step for 15 minutes (both configurable). An attempt is counted when it starts, so parallel requests cannot test more codes than the limit. In memory, per node; a restart clears it. |
 | Audit | Enrolment, removal, success, failure, lockout, recovery-code use, admin reset, settings change and rejected Basic authentication go to Jira's audit log (category "Multi-factor authentication", area Security) and to the logger `de.netresearch.jira.mfa.audit`. |
 
 ### Requests that are not browser sessions
 
 - **Personal access tokens** (`Authorization: Bearer`) pass without a second step. The plugin recognises a token login by the request attribute `access.token.request`, which Jira's bundled `pats-plugin` sets only after a valid token. The header alone is not trusted: Jira serves a request that carries a valid session cookie and an invalid Bearer token as the session user, so header-based skipping would let a password-only session through.
-- **HTTP Basic authentication** (username and password on REST) bypasses the second factor, so it ends when the second factor becomes binding for a user (see "Basic authentication and the grace period" below). A refused request gets `401` and a hint to use a personal access token.
+- **HTTP Basic authentication** (username and password on REST) bypasses the second factor, so it ends when the second factor becomes binding for a user (see "Basic authentication and the grace period" below). A refused request gets `401` and a hint to use a personal access token. A Basic header sent together with a browser session or a remember-me cookie is treated as a session request: Jira may identify the user from the cookie without checking the header's password. Sessions created by a Basic request (scripts with a cookie jar) stay Basic.
 - **Cookie sessions created through `/rest/auth/1/session`** are ordinary sessions and must verify like a browser login (API calls get `401` JSON).
 - **Incoming mail handlers and other background jobs** do not pass through the servlet filter and are not affected.
 - **OAuth (application links)**: not exempted. See "Open risks".
@@ -69,7 +69,7 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 | Active | on | Off = no checks at all. |
 | Groups that must use a second factor | empty = all users | One group per line. Users outside these groups are not forced, but once they enrol they are always challenged. |
 | Exempt groups / exempt users | empty | Never challenged, even with a factor. Use for emergencies, not as a standing policy. |
-| Grace period | 14 days | Counted from the user's first request after the plugin was installed (or after an admin reset). 0 = enrol at the next login. |
+| Grace period | 14 days | Counted from the first request at which the user is enforced and has no factor (or from an admin reset). Users who become enforced later, for example when the group list is widened, get the full period from then. 0 = enrol at the next login. |
 | HTTP Basic authentication | Block | Block for users who have a factor or whose grace period has expired. |
 | Users still allowed to use Basic | empty | Service accounts and scripts that cannot use a token yet. `*` allows everyone. |
 | Passkey relying party ID | empty = base URL host | Changing it invalidates every registered passkey. |
@@ -86,7 +86,7 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 ### A user lost their phone or key
 
 1. If the user still has recovery codes: they enter one instead of the TOTP code and then add a new factor and create new recovery codes on the setup page.
-2. Otherwise an administrator opens `/plugins/servlet/mfa/admin`, looks up the username and presses *Remove all second factors*. That deletes the user's TOTP secret, passkeys and recovery codes and clears a lockout. The grace period starts again, so the user can log in with the password and enrol again. Confirm the user's identity out of band before resetting: the reset reduces the account to its password.
+2. Otherwise an administrator opens `/plugins/servlet/mfa/admin`, looks up the username and presses *Remove all second factors*. That deletes the user's TOTP secret, passkeys and recovery codes, clears a lockout and ends every session verified with the old factors. The grace period starts again, so the user can log in with the password and enrol again. Confirm the user's identity out of band before resetting: the reset reduces the account to its password.
 
 ### A user is locked out after failed attempts
 
@@ -112,7 +112,7 @@ Disabling the plugin removes the second factor for everybody. Basic authenticati
 
 ## Tests
 
-- **Unit tests** (`build/mvn.sh -B test`): RFC 6238 test vectors, drift window and replay rejection, recovery code generation, normalisation and hashing, the attempt limiter, the enforcement policy, request classification and the AES-GCM key handling.
+- **Unit tests** (`build/mvn.sh -B test`): RFC 6238 test vectors, drift window and replay rejection, recovery code generation, normalisation and hashing, the attempt limiter (including parallel attempts), the enforcement policy, request classification (including Jira's `/s/` cache prefix), the verified-session mark, the passkey origin and the AES-GCM key handling (including a missing key file and a leftover temporary file).
 - **Integration test** (`it/`) against `atlassian/jira-software:9.12.3` in Docker, driven by headless Chromium (Playwright) and `otplib` as an independent TOTP implementation:
 
 ```bash

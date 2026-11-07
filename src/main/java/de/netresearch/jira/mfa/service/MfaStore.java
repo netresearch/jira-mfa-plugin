@@ -29,10 +29,39 @@ public class MfaStore {
         return found.length == 0 ? Optional.empty() : Optional.of(found[0]);
     }
 
-    /** Returns the state row, creating it (first seen = now) when missing. */
-    public MfaUser getOrCreateUser(String userKey, long now) {
-        return ao.executeInTransaction(() -> findUser(userKey).orElseGet(() ->
-                ao.create(MfaUser.class, new DBParam("USER_KEY", userKey), new DBParam("FIRST_SEEN", now))));
+    /**
+     * Returns the state row, creating it when missing. A new row has no grace
+     * period yet (first seen = 0); {@link #startGrace} starts it.
+     * Parallel first requests of a user race on the unique user key; the loser
+     * reads the winner's row instead of failing.
+     */
+    public MfaUser getOrCreateUser(String userKey) {
+        Optional<MfaUser> existing = findUser(userKey);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        try {
+            return ao.executeInTransaction(() -> findUser(userKey).orElseGet(() ->
+                    ao.create(MfaUser.class, new DBParam("USER_KEY", userKey), new DBParam("FIRST_SEEN", 0L))));
+        } catch (RuntimeException e) {
+            return findUser(userKey).orElseThrow(() -> e);
+        }
+    }
+
+    /** Starts the user's grace period at {@code now} unless it has started already; returns its start. */
+    public long startGrace(String userKey, long now) {
+        MfaUser u = getOrCreateUser(userKey);
+        if (u.getFirstSeen() > 0) {
+            return u.getFirstSeen();
+        }
+        return ao.executeInTransaction(() -> {
+            MfaUser row = findUser(userKey).orElseThrow(IllegalStateException::new);
+            if (row.getFirstSeen() == 0) {
+                row.setFirstSeen(now);
+                row.save();
+            }
+            return row.getFirstSeen();
+        });
     }
 
     public Optional<MfaUser> findUserByHandle(String handle) {
@@ -42,7 +71,7 @@ public class MfaStore {
 
     public void setTotp(String userKey, String encryptedSecret, long lastStep) {
         ao.executeInTransaction(() -> {
-            MfaUser u = getOrCreateUser(userKey, System.currentTimeMillis());
+            MfaUser u = getOrCreateUser(userKey);
             u.setTotpSecret(encryptedSecret);
             u.setTotpLastStep(lastStep);
             u.save();
@@ -62,7 +91,7 @@ public class MfaStore {
 
     public void setUserHandle(String userKey, String handle) {
         ao.executeInTransaction(() -> {
-            MfaUser u = getOrCreateUser(userKey, System.currentTimeMillis());
+            MfaUser u = getOrCreateUser(userKey);
             u.setUserHandle(handle);
             u.save();
             return null;
@@ -134,13 +163,27 @@ public class MfaStore {
         return ao.executeInTransaction(() -> ao.deleteWithSQL(MfaRecoveryCode.class, "ID = ?", id) == 1);
     }
 
-    /** Removes every factor and recovery code and restarts the grace period. */
+    /** Removes every factor and recovery code, restarts the grace period and invalidates verified sessions. */
     public void resetUser(String userKey, long now) {
         ao.executeInTransaction(() -> {
             ao.deleteWithSQL(MfaPasskey.class, "USER_KEY = ?", userKey);
             ao.deleteWithSQL(MfaRecoveryCode.class, "USER_KEY = ?", userKey);
             ao.deleteWithSQL(MfaUser.class, "USER_KEY = ?", userKey);
-            ao.create(MfaUser.class, new DBParam("USER_KEY", userKey), new DBParam("FIRST_SEEN", now));
+            ao.create(MfaUser.class, new DBParam("USER_KEY", userKey), new DBParam("FIRST_SEEN", now),
+                    new DBParam("FACTORS_CHANGED", now));
+            return null;
+        });
+    }
+
+    public long factorsChanged(String userKey) {
+        return findUser(userKey).map(MfaUser::getFactorsChanged).orElse(0L);
+    }
+
+    public void setFactorsChanged(String userKey, long now) {
+        ao.executeInTransaction(() -> {
+            MfaUser u = getOrCreateUser(userKey);
+            u.setFactorsChanged(now);
+            u.save();
             return null;
         });
     }

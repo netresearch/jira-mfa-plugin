@@ -64,8 +64,16 @@ public class PasskeyService {
     }
 
     public String origin() {
-        URI u = URI.create(env.baseUrl());
-        return u.getScheme() + "://" + u.getHost() + (u.getPort() > 0 ? ":" + u.getPort() : "");
+        return origin(env.baseUrl());
+    }
+
+    /** The browser's origin for a base URL: default ports are omitted, as browsers do. */
+    static String origin(String baseUrl) {
+        URI u = URI.create(baseUrl);
+        String scheme = u.getScheme().toLowerCase(java.util.Locale.ROOT);
+        int port = u.getPort();
+        boolean defaultPort = port < 0 || ("https".equals(scheme) && port == 443) || ("http".equals(scheme) && port == 80);
+        return scheme + "://" + u.getHost().toLowerCase(java.util.Locale.ROOT) + (defaultPort ? "" : ":" + port);
     }
 
     private RelyingParty relyingParty() {
@@ -78,7 +86,7 @@ public class PasskeyService {
     }
 
     private ByteArray userHandle(String userKey) {
-        MfaUser u = store.getOrCreateUser(userKey, System.currentTimeMillis());
+        MfaUser u = store.getOrCreateUser(userKey);
         if (u.getUserHandle() != null) {
             try {
                 return ByteArray.fromBase64Url(u.getUserHandle());
@@ -103,6 +111,10 @@ public class PasskeyService {
                         .build())
                 .timeout(120_000L)
                 .build());
+        // The library fills excludeCredentials by the display username, but the
+        // repository is keyed by the Jira user key; set it from the key, so the
+        // browser refuses an authenticator that is already registered.
+        options = options.toBuilder().excludeCredentials(new Repository().getCredentialIdsForUsername(userKey)).build();
         try {
             return options.toJson();
         } catch (IOException e) {
@@ -122,7 +134,11 @@ public class PasskeyService {
                 .request(request)
                 .response(PublicKeyCredential.parseRegistrationResponseJson(responseJson))
                 .build());
-        store.addPasskey(userKey, result.getKeyId().getId().getBase64Url(), result.getPublicKeyCose().getBase64Url(),
+        String credentialId = result.getKeyId().getId().getBase64Url();
+        if (credentialId.length() > net.java.ao.schema.StringLength.MAX_LENGTH) {
+            throw new IllegalArgumentException("credential ID of " + credentialId.length() + " characters is longer than the column");
+        }
+        store.addPasskey(userKey, credentialId, result.getPublicKeyCose().getBase64Url(),
                 result.getSignatureCount(), label, System.currentTimeMillis());
     }
 

@@ -17,9 +17,14 @@ public interface MfaPasskey extends Entity {
 
     void setUserKey(String userKey);
 
-    /** Credential ID, base64url. */
+    /**
+     * Credential ID, base64url. The longest string column Active Objects can
+     * still index (450 characters, about 337 bytes); without the annotation it
+     * would be the 255-character default. Longer IDs are refused at registration.
+     */
     @NotNull
     @Indexed
+    @StringLength(StringLength.MAX_LENGTH)
     String getCredentialId();
 
     void setCredentialId(String credentialId);

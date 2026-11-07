@@ -34,6 +34,14 @@ public interface MfaUser extends Entity {
 
     void setTotpLastStep(long step);
 
+    /**
+     * Last time a factor was removed or the user was reset (epoch millis, 0 =
+     * never). Sessions verified before this instant must verify again.
+     */
+    long getFactorsChanged();
+
+    void setFactorsChanged(long factorsChanged);
+
     /** Random WebAuthn user handle (base64url), created on first passkey registration. */
     @Indexed
     String getUserHandle();

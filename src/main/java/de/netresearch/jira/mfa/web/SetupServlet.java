@@ -26,6 +26,7 @@ import java.util.Map;
  * password could add their own authenticator.
  */
 public class SetupServlet extends MfaServletSupport {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(SetupServlet.class);
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneOffset.UTC);
 
     @Inject
@@ -36,7 +37,7 @@ public class SetupServlet extends MfaServletSupport {
     /** Returns the requirement if the session may manage factors, or null after redirecting. */
     private Requirement guard(HttpServletRequest req, HttpServletResponse resp, ApplicationUser u) throws IOException {
         Requirement r = mfa.requirement(u);
-        if (r == Requirement.VERIFY && !MfaService.isVerified(req.getSession(false), u)) {
+        if (r == Requirement.VERIFY && !mfa.isVerified(req.getSession(false), u)) {
             resp.sendRedirect(req.getContextPath() + SERVLET + "/verify");
             return null;
         }
@@ -80,7 +81,14 @@ public class SetupServlet extends MfaServletSupport {
             }
             error = "Setting up a second factor is required now.";
         } else if ("totp-confirm".equals(action)) {
-            if (mfa.confirmTotp(u, session, req.getParameter("code"))) {
+            boolean confirmed;
+            try {
+                confirmed = mfa.confirmTotp(u, session, req.getParameter("code"));
+            } catch (RuntimeException e) {
+                LOG.error("cannot store the TOTP secret of {}", u.getUsername(), e);
+                confirmed = false;
+            }
+            if (confirmed) {
                 message = "Authenticator app added.";
                 newCodes = afterFirstFactor(req, u, hadFactor);
             } else {
@@ -88,14 +96,14 @@ public class SetupServlet extends MfaServletSupport {
             }
         } else if ("totp-remove".equals(action)) {
             if (canRemove(u, true)) {
-                mfa.removeTotp(u);
+                mfa.removeTotp(u, req);
                 message = "Authenticator app removed.";
             } else {
                 error = "Add another factor before removing your last one.";
             }
         } else if ("passkey-remove".equals(action)) {
             if (canRemove(u, false)) {
-                message = mfa.removePasskey(u, parseId(req.getParameter("id"))) ? "Passkey removed." : null;
+                message = mfa.removePasskey(u, parseId(req.getParameter("id")), req) ? "Passkey removed." : null;
             } else {
                 error = "Add another factor before removing your last one.";
             }
@@ -121,7 +129,7 @@ public class SetupServlet extends MfaServletSupport {
     /** After the first factor: the session counts as verified and recovery codes are issued. */
     List<String> afterFirstFactor(HttpServletRequest req, ApplicationUser u, boolean hadFactor) {
         if (!hadFactor) {
-            MfaService.markVerified(req, u);
+            mfa.markVerified(req, u);
         }
         if (mfa.remainingRecoveryCodes(u.getKey()) == 0) {
             return mfa.regenerateRecoveryCodes(u);
@@ -169,9 +177,9 @@ public class SetupServlet extends MfaServletSupport {
         if (r == Requirement.ENROL_REQUIRED) {
             b.append("<div class=\"notice\" role=\"alert\">Your account requires a second factor. Set up an authenticator app or a passkey to continue.</div>");
         } else if (r == Requirement.ENROL_OPTIONAL) {
-            Instant end = mfa.graceEnd(key);
+            String end = mfa.graceEndIfStarted(key).map(DATE::format).orElse("the end of the grace period");
             b.append("<div class=\"notice\">Your account will require a second factor from <strong>")
-                    .append(DATE.format(end)).append("</strong>. Set it up now, or continue and do it later.")
+                    .append(Html.esc(end)).append("</strong>. Set it up now, or continue and do it later.")
                     .append("<form method=\"post\" class=\"inline\">").append(csrfField(req)).append(Html.hidden("action", "later"))
                     .append(" <button type=\"submit\" class=\"secondary\" id=\"later\">Remind me later</button></form></div>");
         }
@@ -182,7 +190,20 @@ public class SetupServlet extends MfaServletSupport {
             b.append("<p>An authenticator app is set up.</p><form method=\"post\">").append(csrfField(req))
                     .append(Html.hidden("action", "totp-remove")).append("<button type=\"submit\" class=\"secondary\">Remove authenticator app</button></form>");
         } else {
-            byte[] secret = mfa.pendingTotpSecret(session);
+            byte[] secret;
+            try {
+                secret = mfa.pendingTotpSecret(session);
+            } catch (RuntimeException e) {
+                // key file problem: keep passkeys and "later" usable instead of failing the whole page
+                LOG.error("cannot offer TOTP enrolment to {}", u.getUsername(), e);
+                secret = null;
+            }
+            if (secret == null) {
+                b.append("<p class=\"error\" role=\"alert\" id=\"totp-unavailable\">Adding an authenticator app is not possible right now. ")
+                        .append("Add a passkey or security key instead, or contact your Jira administrator.</p></div>");
+                appendPasskeysAndRest(b, req, resp, u, r, session, hasTotp, passkeys);
+                return;
+            }
             String account = u.getUsername();
             String uri = Totp.otpauthUri(mfa.settings().issuer, account, secret);
             b.append("<p>Scan this code with an authenticator app (for example Aegis, Google Authenticator, Microsoft Authenticator or 1Password), then enter the 6-digit code it shows.</p>")
@@ -194,7 +215,13 @@ public class SetupServlet extends MfaServletSupport {
                     .append("<button type=\"submit\" id=\"totp-confirm\">Add authenticator app</button></form>");
         }
         b.append("</div>");
+        appendPasskeysAndRest(b, req, resp, u, r, session, hasTotp, passkeys);
+    }
 
+    private void appendPasskeysAndRest(StringBuilder b, HttpServletRequest req, HttpServletResponse resp, ApplicationUser u,
+                                       Requirement r, HttpSession session, boolean hasTotp, List<MfaPasskey> passkeys) throws IOException {
+        String ctx = req.getContextPath();
+        String key = u.getKey();
         // Passkeys
         b.append("<div class=\"card\"><h2>Passkeys and security keys</h2>");
         if (!passkeys.isEmpty()) {
@@ -226,7 +253,7 @@ public class SetupServlet extends MfaServletSupport {
                     .append("<form method=\"post\">").append(csrfField(req)).append(Html.hidden("action", "recovery-regenerate"))
                     .append("<button type=\"submit\" class=\"secondary\" id=\"recovery-regenerate\">Create new recovery codes</button></form></div>");
         }
-        if (MfaService.isVerified(session, u) || r == Requirement.NONE) {
+        if (mfa.isVerified(session, u) || r == Requirement.NONE) {
             b.append("<p><a href=\"").append(Html.esc(ctx)).append("/secure/Dashboard.jspa\">Back to Jira</a></p>");
         }
         b.append(logoutForm(req));

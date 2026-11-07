@@ -65,11 +65,30 @@ abstract class MfaServletSupport extends HttpServlet {
                 target = (String) r;
             }
         }
-        if (target == null || !target.startsWith("/") || target.startsWith("//") || target.contains("\\")
-                || target.startsWith(SERVLET)) {
+        if (!isSafeLocalPath(target)) {
             target = "/secure/Dashboard.jspa";
         }
         return req.getContextPath() + target;
+    }
+
+    /**
+     * A path on this Jira that is not one of the plugin's own pages. Control
+     * characters are refused because browsers strip tab and newline from URLs,
+     * which would turn {@code /\t/evil.example} into the protocol-relative
+     * {@code //evil.example}.
+     */
+    static boolean isSafeLocalPath(String target) {
+        if (target == null || !target.startsWith("/") || target.startsWith("//") || target.contains("\\")
+                || target.startsWith(SERVLET)) {
+            return false;
+        }
+        for (int i = 0; i < target.length(); i++) {
+            char c = target.charAt(i);
+            if (c < 0x20 || c == 0x7f) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Jira 9.12 answers 403 to /logout without its XSRF token. */

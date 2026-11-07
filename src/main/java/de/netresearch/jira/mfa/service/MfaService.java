@@ -10,6 +10,7 @@ import de.netresearch.jira.mfa.core.MfaSettings;
 import de.netresearch.jira.mfa.core.RecoveryCodes;
 import de.netresearch.jira.mfa.core.SecretCipher;
 import de.netresearch.jira.mfa.core.Totp;
+import de.netresearch.jira.mfa.core.VerifiedMark;
 
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -26,10 +27,12 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Second-factor business logic shared by the filter and the servlets. */
 @Named
 public class MfaService {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(MfaService.class);
     public static final String S_VERIFIED = "de.netresearch.jira.mfa.verified";
     public static final String S_GRACE_ACK = "de.netresearch.jira.mfa.graceAck";
     public static final String S_PENDING_TOTP = "de.netresearch.jira.mfa.pendingTotp";
@@ -52,6 +55,7 @@ public class MfaService {
     private volatile SecretCipher cipher;
     private volatile AttemptLimiter limiter;
     private volatile String limiterConfig = "";
+    private final Map<String, Long> factorsChanged = new ConcurrentHashMap<>();
 
     @Inject
     public MfaService(MfaStore store, SettingsStore settings, JiraEnvironment env, AuditLogger audit, PasskeyService passkeys) {
@@ -72,7 +76,7 @@ public class MfaService {
             synchronized (this) {
                 if (cipher == null) {
                     try {
-                        cipher = SecretCipher.fromKeyFile(env.keyFile());
+                        cipher = SecretCipher.fromKeyFile(env.keyFile(), store.countEnrolledUsers() == 0);
                     } catch (IOException e) {
                         throw new UncheckedIOException("cannot read or create MFA key file " + env.keyFile(), e);
                     }
@@ -112,16 +116,28 @@ public class MfaService {
         return store.recoveryCodes(userKey).size();
     }
 
-    public Instant firstSeen(String userKey) {
-        MfaUser u = store.getOrCreateUser(userKey, clock.millis());
-        return Instant.ofEpochMilli(u.getFirstSeen());
+    /** Start of the user's grace period, starting it now if it has not started. */
+    private Instant startGrace(String userKey) {
+        return Instant.ofEpochMilli(store.startGrace(userKey, clock.millis()));
     }
 
-    public Instant graceEnd(String userKey) {
-        return EnforcementPolicy.graceEnd(settings.get(), firstSeen(userKey));
+    /** End of the user's grace period, or empty when it has not started (the user was never enforced without a factor). */
+    public java.util.Optional<Instant> graceEndIfStarted(String userKey) {
+        return store.findUser(userKey).filter(u -> u.getFirstSeen() > 0)
+                .map(u -> EnforcementPolicy.graceEnd(settings.get(), Instant.ofEpochMilli(u.getFirstSeen())));
     }
 
+    /** What the user needs now. For an enforced user without a factor this starts the grace period. */
     public Requirement requirement(ApplicationUser user) {
+        return requirement(user, true);
+    }
+
+    /** As {@link #requirement(ApplicationUser)}, without starting a grace period (for the admin page). */
+    public Requirement requirementPreview(ApplicationUser user) {
+        return requirement(user, false);
+    }
+
+    private Requirement requirement(ApplicationUser user, boolean mayStartGrace) {
         if (env.isRecoveryAdmin(user)) {
             return Requirement.NONE;
         }
@@ -130,7 +146,17 @@ public class MfaService {
             return Requirement.NONE;
         }
         String key = user.getKey();
-        return EnforcementPolicy.evaluate(s, user.getUsername(), env.groups(user), hasFactor(key), firstSeen(key), clock.instant());
+        java.util.Collection<String> groups = env.groups(user);
+        boolean hasFactor = hasFactor(key);
+        // The grace period starts when the user is first seen enforced and without
+        // a factor, not at an earlier visit: when enforcement is widened later, the
+        // newly enforced users still get their full grace period.
+        Instant first = null;
+        if (!hasFactor && EnforcementPolicy.isEnforced(s, user.getUsername(), groups)) {
+            first = mayStartGrace ? startGrace(key)
+                    : graceEndIfStarted(key).map(end -> end.minus(java.time.Duration.ofDays(s.graceDays))).orElse(clock.instant());
+        }
+        return EnforcementPolicy.evaluate(s, user.getUsername(), groups, hasFactor, first, clock.instant());
     }
 
     public boolean isEnforced(ApplicationUser user) {
@@ -139,14 +165,38 @@ public class MfaService {
 
     // ---- session ----------------------------------------------------------
 
-    public static boolean isVerified(HttpSession session, ApplicationUser user) {
-        return session != null && user != null && user.getKey().equals(session.getAttribute(S_VERIFIED));
+    public boolean isVerified(HttpSession session, ApplicationUser user) {
+        if (session == null || user == null) {
+            return false;
+        }
+        Object mark = session.getAttribute(S_VERIFIED);
+        return mark != null && VerifiedMark.isValid(mark, user.getKey(), factorsChanged(user.getKey()));
     }
 
     /** Marks the session as verified and rotates the session ID (session fixation defence). */
-    public static void markVerified(HttpServletRequest req, ApplicationUser user) {
-        req.getSession(true).setAttribute(S_VERIFIED, user.getKey());
+    public void markVerified(HttpServletRequest req, ApplicationUser user) {
+        req.getSession(true).setAttribute(S_VERIFIED, VerifiedMark.create(user.getKey(), clock.millis()));
         req.changeSessionId();
+    }
+
+    /** Read on every request of a verified session, so cached; Jira Server is a single node. */
+    private long factorsChanged(String userKey) {
+        return factorsChanged.computeIfAbsent(userKey, store::factorsChanged);
+    }
+
+    /**
+     * Ends every verified session of the user except, when given, the one
+     * making the change: a removed or reset factor must not leave a session
+     * that was verified with it.
+     */
+    private void endVerifiedSessions(ApplicationUser user, HttpServletRequest keepVerified) {
+        boolean keep = keepVerified != null && isVerified(keepVerified.getSession(false), user);
+        long now = clock.millis();
+        store.setFactorsChanged(user.getKey(), now);
+        factorsChanged.put(user.getKey(), now);
+        if (keep) {
+            markVerified(keepVerified, user);
+        }
     }
 
     public String csrfToken(HttpSession session) {
@@ -205,8 +255,10 @@ public class MfaService {
         return true;
     }
 
-    public void removeTotp(ApplicationUser user) {
+    /** Removes the user's TOTP; other verified sessions of the user must verify again. */
+    public void removeTotp(ApplicationUser user, HttpServletRequest req) {
         store.removeTotp(user.getKey());
+        endVerifiedSessions(user, req);
         audit.log(AuditLogger.Action.TOTP_REMOVED, user, Map.of());
     }
 
@@ -217,7 +269,8 @@ public class MfaService {
     /** Verifies a TOTP code or, failing that, a recovery code. Counts failures. */
     public VerifyOutcome verifySecondStep(ApplicationUser user, String input, String remoteAddr) {
         String key = user.getKey();
-        if (limiter().lockedUntil(key) != null) {
+        AttemptLimiter.Admission admission = beginAttempt(user);
+        if (admission == AttemptLimiter.Admission.REFUSED) {
             return VerifyOutcome.LOCKED;
         }
         if (input != null && !input.trim().isEmpty()) {
@@ -233,13 +286,22 @@ public class MfaService {
                 return VerifyOutcome.OK;
             }
         }
-        return recordFailure(user, "code", remoteAddr);
+        return attemptFailed(user, admission, "code", remoteAddr);
     }
 
-    public VerifyOutcome recordFailure(ApplicationUser user, String method, String remoteAddr) {
-        boolean locked = limiter().recordFailure(user.getKey());
+    /**
+     * Admits one second-step attempt for the user, counting it as a failure
+     * until it succeeds. Callers check the factor only when the result is not
+     * {@code REFUSED}, and finish with {@link #attemptFailed} or a success.
+     */
+    public AttemptLimiter.Admission beginAttempt(ApplicationUser user) {
+        return limiter().tryBegin(user.getKey());
+    }
+
+    /** Logs a failed attempt that {@link #beginAttempt} already counted. */
+    public VerifyOutcome attemptFailed(ApplicationUser user, AttemptLimiter.Admission admission, String method, String remoteAddr) {
         audit.log(AuditLogger.Action.SECOND_STEP_FAILED, user, Map.of("method", method, "remote address", nz(remoteAddr)));
-        if (locked) {
+        if (admission == AttemptLimiter.Admission.ADMITTED_LAST) {
             audit.log(AuditLogger.Action.LOCKED_OUT, user, Map.of("minutes", Integer.toString(settings.get().lockoutMinutes)));
             return VerifyOutcome.LOCKED;
         }
@@ -256,7 +318,16 @@ public class MfaService {
         if (u == null || u.getTotpSecret() == null) {
             return false;
         }
-        byte[] secret = cipher().decrypt(u.getTotpSecret());
+        byte[] secret;
+        try {
+            secret = cipher().decrypt(u.getTotpSecret());
+        } catch (RuntimeException e) {
+            // Missing or replaced key file: TOTP cannot work, but recovery codes
+            // and passkeys must still let the user in.
+            LOG.error("cannot decrypt the TOTP secret of {}; is {} the key file the secrets were written with?",
+                    user.getUsername(), env.keyFile(), e);
+            return false;
+        }
         OptionalLong step = totp.verify(secret, input, clock.instant(), u.getTotpLastStep());
         if (!step.isPresent()) {
             return false;
@@ -301,9 +372,11 @@ public class MfaService {
         audit.log(AuditLogger.Action.PASSKEY_REGISTERED, user, Map.of("label", nz(label)));
     }
 
-    public boolean removePasskey(ApplicationUser user, int id) {
+    /** Removes one of the user's passkeys; other verified sessions of the user must verify again. */
+    public boolean removePasskey(ApplicationUser user, int id, HttpServletRequest req) {
         boolean removed = store.deletePasskey(user.getKey(), id);
         if (removed) {
+            endVerifiedSessions(user, req);
             audit.log(AuditLogger.Action.PASSKEY_REMOVED, user, Map.of("id", Integer.toString(id)));
         }
         return removed;
@@ -312,7 +385,9 @@ public class MfaService {
     // ---- administration ---------------------------------------------------
 
     public void adminReset(ApplicationUser admin, ApplicationUser target) {
-        store.resetUser(target.getKey(), clock.millis());
+        long now = clock.millis();
+        store.resetUser(target.getKey(), now);
+        factorsChanged.put(target.getKey(), now);
         limiter().reset(target.getKey());
         audit.log(AuditLogger.Action.ADMIN_RESET, target, Map.of("administrator", admin.getUsername()));
     }

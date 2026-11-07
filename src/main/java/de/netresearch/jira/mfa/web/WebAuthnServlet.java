@@ -2,6 +2,7 @@ package de.netresearch.jira.mfa.web;
 
 import com.atlassian.jira.user.ApplicationUser;
 import com.yubico.webauthn.exception.RegistrationFailedException;
+import de.netresearch.jira.mfa.core.AttemptLimiter;
 import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
 import de.netresearch.jira.mfa.core.RequestClassifier;
 import de.netresearch.jira.mfa.service.MfaService;
@@ -55,7 +56,7 @@ public class WebAuthnServlet extends MfaServletSupport {
         try {
             switch (path) {
                 case "/webauthn/register/options":
-                    if (r == Requirement.VERIFY && !MfaService.isVerified(session, u)) {
+                    if (r == Requirement.VERIFY && !mfa.isVerified(session, u)) {
                         json(resp, 403, "{\"error\":\"verify first\"}");
                         return;
                     }
@@ -64,7 +65,7 @@ public class WebAuthnServlet extends MfaServletSupport {
                     json(resp, 200, PasskeyService.creationJson(regRequest));
                     return;
                 case "/webauthn/register/finish": {
-                    if (r == Requirement.VERIFY && !MfaService.isVerified(session, u)) {
+                    if (r == Requirement.VERIFY && !mfa.isVerified(session, u)) {
                         json(resp, 403, "{\"error\":\"verify first\"}");
                         return;
                     }
@@ -79,7 +80,7 @@ public class WebAuthnServlet extends MfaServletSupport {
                     pk.finishRegistration(u.getKey(), (String) stored, body(req), label);
                     mfa.passkeyRegistered(u, label);
                     if (!hadFactor) {
-                        MfaService.markVerified(req, u);
+                        mfa.markVerified(req, u);
                     }
                     if (mfa.remainingRecoveryCodes(u.getKey()) == 0) {
                         List<String> codes = mfa.regenerateRecoveryCodes(u);
@@ -108,7 +109,8 @@ public class WebAuthnServlet extends MfaServletSupport {
                         json(resp, 400, "{\"error\":\"no verification in progress\"}");
                         return;
                     }
-                    if (mfa.lockedUntil(u) != null) {
+                    AttemptLimiter.Admission admission = mfa.beginAttempt(u);
+                    if (admission == AttemptLimiter.Admission.REFUSED) {
                         json(resp, 429, "{\"error\":\"locked\"}");
                         return;
                     }
@@ -120,13 +122,13 @@ public class WebAuthnServlet extends MfaServletSupport {
                         ok = false;
                     }
                     if (!ok) {
-                        MfaService.VerifyOutcome o = mfa.recordFailure(u, "passkey", req.getRemoteAddr());
+                        MfaService.VerifyOutcome o = mfa.attemptFailed(u, admission, "passkey", req.getRemoteAddr());
                         json(resp, o == MfaService.VerifyOutcome.LOCKED ? 429 : 401, "{\"error\":\"passkey not accepted\"}");
                         return;
                     }
                     String target = takeReturnUrl(req);
                     mfa.recordPasskeySuccess(u, req.getRemoteAddr());
-                    MfaService.markVerified(req, u);
+                    mfa.markVerified(req, u);
                     json(resp, 200, "{\"ok\":true,\"redirect\":" + jsonString(target) + "}");
                     return;
                 }
@@ -137,12 +139,24 @@ public class WebAuthnServlet extends MfaServletSupport {
         } catch (RegistrationFailedException e) {
             LOG.info("passkey registration rejected for {}: {}", u.getUsername(), e.getMessage());
             json(resp, 400, "{\"error\":\"registration rejected\"}");
+        } catch (IOException | RuntimeException e) {
+            // mfa.js reads every answer as JSON; the container's HTML error page would show as a parse error
+            LOG.warn("WebAuthn request of {} failed", u.getUsername(), e);
+            if (!resp.isCommitted()) {
+                resp.reset();
+                json(resp, 400, "{\"error\":\"request not accepted\"}");
+            }
         }
     }
 
     private static String label(HttpServletRequest req) {
         String raw = req.getHeader("X-MFA-Label");
-        String label = raw == null ? "" : URLDecoder.decode(raw, StandardCharsets.UTF_8).trim();
+        String label;
+        try {
+            label = raw == null ? "" : URLDecoder.decode(raw, StandardCharsets.UTF_8).trim();
+        } catch (IllegalArgumentException e) {
+            label = "";
+        }
         if (label.isEmpty()) {
             label = "Passkey";
         }

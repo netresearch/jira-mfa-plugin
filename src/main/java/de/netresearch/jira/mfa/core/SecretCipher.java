@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.GeneralSecurityException;
@@ -34,22 +35,33 @@ public final class SecretCipher {
         this.key = key;
     }
 
-    /** Loads the key file, creating it (mode 600) when it does not exist yet. */
-    public static SecretCipher fromKeyFile(Path file) throws IOException {
+    /**
+     * Loads the key file. When it does not exist and {@code mayCreate} is true,
+     * a new key is created (mode 600). Callers pass false while encrypted
+     * secrets exist: a new key could not read them, and creating one silently
+     * would turn a lost key file into a lockout of every TOTP user.
+     */
+    public static SecretCipher fromKeyFile(Path file, boolean mayCreate) throws IOException {
         if (!Files.exists(file)) {
+            if (!mayCreate) {
+                throw new IOException("MFA key file " + file + " is missing while encrypted TOTP secrets exist; "
+                        + "restore it from the backup of $JIRA_HOME");
+            }
             Files.createDirectories(file.getParent());
             try {
                 KeyGenerator gen = KeyGenerator.getInstance("AES");
                 gen.init(256);
                 byte[] raw = gen.generateKey().getEncoded();
                 Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-                Files.write(tmp, Base64.getEncoder().encode(raw), StandardOpenOption.CREATE_NEW);
+                // a leftover from an interrupted first start is overwritten
+                Files.write(tmp, Base64.getEncoder().encode(raw), StandardOpenOption.CREATE,
+                        StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                 try {
                     Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString("rw-------"));
                 } catch (UnsupportedOperationException ignored) {
                     // non-POSIX file system
                 }
-                Files.move(tmp, file);
+                Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE);
             } catch (GeneralSecurityException e) {
                 throw new IllegalStateException("AES unavailable", e);
             }

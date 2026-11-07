@@ -32,6 +32,17 @@ class RequestClassifierTest {
     }
 
     @Test
+    void cachePrefixIsOpenOnlyForStaticTargets() {
+        assertTrue(RequestClassifier.isOpen("/s/d41d8cd98f00b204e9800998ecf8427e-CDN/-1ka3d/9120003/_/download/batch/x/x.css"));
+        assertTrue(RequestClassifier.isOpen("/s/abc/_/images/icons/x.png"));
+        assertFalse(RequestClassifier.isOpen("/s/1/_/browse/TEST-1"), "a page behind the cache prefix");
+        assertFalse(RequestClassifier.isOpen("/s/1/_/rest/api/2/myself"), "REST behind the cache prefix");
+        assertFalse(RequestClassifier.isOpen("/s/1/_/plugins/servlet/mfa/admin"));
+        assertFalse(RequestClassifier.isOpen("/s/1/_/s/2/_/secure/Dashboard.jspa"), "nested prefix");
+        assertFalse(RequestClassifier.isOpen("/s/no-separator/download/resources/x.js"));
+    }
+
+    @Test
     void encodedTraversalIsDetected() {
         assertTrue(RequestClassifier.hasEncodedSeparators("/plugins/servlet/mfa/verify/%2e%2e/%2E%2E/secure/Dashboard.jspa"));
         assertTrue(RequestClassifier.hasEncodedSeparators("/plugins/servlet/mfa/verify%2f..%2fx"));
