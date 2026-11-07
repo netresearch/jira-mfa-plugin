@@ -55,11 +55,44 @@ class SecretCipherTest {
     }
 
     @Test
-    void leftoverTempFileFromAnInterruptedStartIsOverwritten(@TempDir Path dir) throws Exception {
+    void leftoverTempFileFromAnInterruptedStartDoesNotBlockCreation(@TempDir Path dir) throws Exception {
         Path key = dir.resolve("secret.key");
         Files.write(dir.resolve("secret.key.tmp"), "half-written".getBytes(StandardCharsets.US_ASCII));
         SecretCipher c = SecretCipher.fromKeyFile(key, true);
         assertArrayEquals(new byte[]{7}, c.decrypt(c.encrypt(new byte[]{7})));
-        assertTrue(Files.notExists(dir.resolve("secret.key.tmp")));
+        assertTrue(Files.exists(key));
+    }
+
+    @Test
+    void parallelCreatorsAllEndUpWithTheKeyOnDisk(@TempDir Path dir) throws Exception {
+        Path key = dir.resolve("mfa").resolve("secret.key");
+        int creators = 16;
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(creators);
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.List<java.util.concurrent.Future<SecretCipher>> results = new java.util.ArrayList<>();
+        try {
+            for (int i = 0; i < creators; i++) {
+                results.add(pool.submit(() -> {
+                    start.await();
+                    return SecretCipher.fromKeyFile(key, true);
+                }));
+            }
+            start.countDown();
+            java.util.List<SecretCipher> ciphers = new java.util.ArrayList<>();
+            for (java.util.concurrent.Future<SecretCipher> f : results) {
+                ciphers.add(f.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            }
+            SecretCipher onDisk = SecretCipher.fromKeyFile(key, false);
+            for (SecretCipher c : ciphers) {
+                String enc = c.encrypt(new byte[]{1, 2});
+                assertArrayEquals(new byte[]{1, 2}, onDisk.decrypt(enc),
+                        "every creator encrypts with the key that is on disk");
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        try (java.util.stream.Stream<Path> files = Files.list(key.getParent())) {
+            assertEquals(1, files.count(), "no temporary files are left");
+        }
     }
 }

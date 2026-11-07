@@ -9,7 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.GeneralSecurityException;
@@ -48,29 +48,58 @@ public final class SecretCipher {
                         + "restore it from the backup of $JIRA_HOME");
             }
             Files.createDirectories(file.getParent());
-            try {
-                KeyGenerator gen = KeyGenerator.getInstance("AES");
-                gen.init(256);
-                byte[] raw = gen.generateKey().getEncoded();
-                Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-                // a leftover from an interrupted first start is overwritten
-                Files.write(tmp, Base64.getEncoder().encode(raw), StandardOpenOption.CREATE,
-                        StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-                try {
-                    Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString("rw-------"));
-                } catch (UnsupportedOperationException ignored) {
-                    // non-POSIX file system
-                }
-                Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE);
-            } catch (GeneralSecurityException e) {
-                throw new IllegalStateException("AES unavailable", e);
-            }
+            publishNewKey(file);
         }
         byte[] raw = Base64.getDecoder().decode(new String(Files.readAllBytes(file), StandardCharsets.US_ASCII).trim());
         if (raw.length != 32) {
             throw new IllegalStateException("MFA key file " + file + " does not hold a 256-bit key");
         }
         return new SecretCipher(new SecretKeySpec(raw, "AES"));
+    }
+
+    /**
+     * Writes a new key to a temporary file of its own and publishes it under
+     * {@code file} without ever replacing an existing key. Several creators
+     * (Data Center nodes sharing the home, or a restart racing a running
+     * node) can get here at once; exactly one key wins and every creator then
+     * reads that one, so no node keeps encrypting with a key that is not on
+     * disk. Publication is a hard link, which fails if the target exists; on a
+     * file system without hard links a non-replacing move is used instead.
+     */
+    private static void publishNewKey(Path file) throws IOException {
+        byte[] raw;
+        try {
+            KeyGenerator gen = KeyGenerator.getInstance("AES");
+            gen.init(256);
+            raw = gen.generateKey().getEncoded();
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("AES unavailable", e);
+        }
+        Path tmp = Files.createTempFile(file.getParent(), file.getFileName() + ".", ".tmp");
+        try {
+            try {
+                Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString("rw-------"));
+            } catch (UnsupportedOperationException ignored) {
+                // non-POSIX file system
+            }
+            Files.write(tmp, Base64.getEncoder().encode(raw), StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            try {
+                Files.createLink(file, tmp);
+            } catch (FileAlreadyExistsException anotherCreatorWon) {
+                // read the key that is on disk
+            } catch (UnsupportedOperationException | IOException noHardLinks) {
+                if (Files.exists(file)) {
+                    return;
+                }
+                try {
+                    Files.move(tmp, file); // without REPLACE_EXISTING: fails if the target appeared meanwhile
+                } catch (FileAlreadyExistsException anotherCreatorWon) {
+                    // read the key that is on disk
+                }
+            }
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
     }
 
     public String encrypt(byte[] plain) {
