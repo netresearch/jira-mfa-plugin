@@ -175,13 +175,14 @@ public class MfaStore {
         return ao.executeInTransaction(() -> ao.deleteWithSQL(MfaRecoveryCode.class, "ID = ?", id) == 1);
     }
 
-    /** Removes every factor and recovery code, restarts the grace period and invalidates verified sessions. */
+    /** Removes every factor and recovery code, clears the grace period and invalidates verified sessions. */
     public void resetUser(String userKey, long now) {
         ao.executeInTransaction(() -> {
             ao.deleteWithSQL(MfaPasskey.class, "USER_KEY = ?", userKey);
             ao.deleteWithSQL(MfaRecoveryCode.class, "USER_KEY = ?", userKey);
             ao.deleteWithSQL(MfaUser.class, "USER_KEY = ?", userKey);
-            ao.create(MfaUser.class, new DBParam("USER_KEY", userKey), new DBParam("FIRST_SEEN", now),
+            // FIRST_SEEN 0: the grace period starts at the user's next request as an enforced user
+            ao.create(MfaUser.class, new DBParam("USER_KEY", userKey), new DBParam("FIRST_SEEN", 0L),
                     new DBParam("FACTORS_CHANGED", now));
             return null;
         });

@@ -268,7 +268,14 @@ public class MfaService {
     public byte[] pendingTotpSecret(HttpSession session) {
         Object pending = session.getAttribute(S_PENDING_TOTP);
         if (pending instanceof String) {
-            return cipher().decrypt((String) pending);
+            try {
+                return cipher().decrypt((String) pending);
+            } catch (RuntimeException e) {
+                // encrypted with a key file that has since been replaced: start over with a new secret
+                LOG.warn("discarding a pending TOTP secret that the current key file cannot read", e);
+                session.removeAttribute(S_PENDING_TOTP);
+                cipher = null;
+            }
         }
         byte[] secret = totp.newSecret();
         session.setAttribute(S_PENDING_TOTP, cipher().encrypt(secret));
