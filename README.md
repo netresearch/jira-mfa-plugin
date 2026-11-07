@@ -8,7 +8,7 @@ A Jira Server / Data Center 9.12 app that makes a second factor mandatory for br
 
 Until it does, Jira serves nothing but the plugin's own pages, static resources and logout. Users without a factor are sent to enrolment, during a configurable grace period (default 14 days) with a "Remind me later" option, after it without one.
 
-Built for and tested against Jira Software 9.12.3 on Java 17 (compiled for Java 11).
+Built for Jira Software 9.12.3 (compiled for Java 11) and tested against it on Java 17 and on Java 11, with a Server and with a Data Center licence.
 
 ## How it works
 
@@ -27,10 +27,22 @@ Built for and tested against Jira Software 9.12.3 on Java 17 (compiled for Java 
 ### Requests that are not browser sessions
 
 - **Personal access tokens** (`Authorization: Bearer`) pass without a second step. The plugin recognises a token login by the request attribute `access.token.request`, which Jira's bundled `pats-plugin` sets only after a valid token. The header alone is not trusted: Jira serves a request that carries a valid session cookie and an invalid Bearer token as the session user, so header-based skipping would let a password-only session through.
-- **HTTP Basic authentication** (username and password on REST) would bypass the second factor. For every user who has or needs a second factor it is answered with `401` and a hint to use a personal access token. Service accounts can be allow-listed. Users who are neither enforced nor enrolled keep Basic.
+- **HTTP Basic authentication** (username and password on REST) bypasses the second factor, so it ends when the second factor becomes binding for a user (see "Basic authentication and the grace period" below). A refused request gets `401` and a hint to use a personal access token.
 - **Cookie sessions created through `/rest/auth/1/session`** are ordinary sessions and must verify like a browser login (API calls get `401` JSON).
 - **Incoming mail handlers and other background jobs** do not pass through the servlet filter and are not affected.
 - **OAuth (application links)**: not exempted. See "Open risks".
+
+### Basic authentication and the grace period
+
+| User state | Basic authentication |
+|---|---|
+| Not enforced and no factor | allowed |
+| Enforced, no factor, grace period running | allowed, so existing scripts keep working while people enrol |
+| Enforced, no factor, grace period expired | refused |
+| Has a factor (TOTP or passkey), also during the grace period | refused |
+| On the Basic allow-list (service accounts), or policy set to "Allow" | allowed |
+
+Refusing Basic as soon as a user has enrolled is deliberate: if the password alone still opened the REST API, the factor would not protect against a leaked password. An enrolled user can create a personal access token from a verified browser session (*Profile > Personal Access Tokens*).
 
 ## Build
 
@@ -47,7 +59,7 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 
 1. Back up the database and `$JIRA_HOME`.
 2. Start Jira with the recovery account configured, so a way in exists that never needs a second factor (see "Lockout and emergencies"), or make sure you know how to set it.
-3. Upload the jar in *Administration > Manage apps > Upload app*. Uploading must be enabled (`-Dupm.plugin.upload.enabled=true` on Jira 9.x). Alternatively use `it/install-plugin.sh <jar>` (UPM REST API; needs Basic authentication of an administrator, because UPM did not issue its upload token to a personal access token in the test). Once the plugin is active, Basic authentication of enforced administrators is refused; use `recovery_admin` (recovery mode) or an allow-listed administrator for scripted updates.
+3. Upload the jar in *Administration > Manage apps > Upload app*. Uploading must be enabled (`-Dupm.plugin.upload.enabled=true` on Jira 9.x). Alternatively use `it/install-plugin.sh <jar>` (UPM REST API; needs Basic authentication of an administrator, because UPM did not issue its upload token to a personal access token in the test). Once an administrator has enrolled or the grace period has expired, Basic authentication of that administrator is refused; use `recovery_admin` (recovery mode) or an allow-listed administrator for scripted updates.
 4. Open *Administration > System > Security > Two-step verification* (`/plugins/servlet/mfa/admin`) and review the settings before users log in. The plugin is **active immediately after installation** with the defaults below.
 
 ### Settings
@@ -58,7 +70,7 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 | Groups that must use a second factor | empty = all users | One group per line. Users outside these groups are not forced, but once they enrol they are always challenged. |
 | Exempt groups / exempt users | empty | Never challenged, even with a factor. Use for emergencies, not as a standing policy. |
 | Grace period | 14 days | Counted from the user's first request after the plugin was installed (or after an admin reset). 0 = enrol at the next login. |
-| HTTP Basic authentication | Block | Block for users who have or need a second factor. |
+| HTTP Basic authentication | Block | Block for users who have a factor or whose grace period has expired. |
 | Users still allowed to use Basic | empty | Service accounts and scripts that cannot use a token yet. `*` allows everyone. |
 | Passkey relying party ID | empty = base URL host | Changing it invalidates every registered passkey. |
 | Name shown in authenticator apps | `Jira` | Issuer in the otpauth URI. |
@@ -116,19 +128,18 @@ node setup-jira.mjs <file with a timebomb licence>   # setup wizard
 JIRA_ADMIN_PAT=<admin token> JIRA_RECOVERY_PASS=<secret> node e2e.mjs
 ```
 
-Not covered by the automated tests: removing factors (including the last-factor rule), creating new recovery codes, saving settings through the admin form, group enforcement and exemptions, the Basic allow-list, OAuth/application links, Service Management, the mobile app, a Server-licensed instance and a Java 11 runtime.
+Not covered by the automated tests: removing factors (including the last-factor rule), creating new recovery codes, group enforcement and exemptions, OAuth/application links, Service Management and the mobile app.
 
-The licence is the "10 user Jira Software Data Center license, expires in 3 hours" from [Atlassian's timebomb licences](https://developer.atlassian.com/platform/marketplace/timebomb-licenses-for-testing-server-apps/). `e2e.mjs` covers: grace-period offer and postponement, TOTP enrolment with QR code and manual key, recovery codes issued, second step after the next login, wrong code, replayed code, REST blocked for an unverified session (also with a garbage Bearer header), personal access token accepted, Basic authentication refused, recovery code use and single use, lockout after five failures, admin reset behind websudo, an enrolled administrator unable to reach the MFA admin page or UPM before the second step, passkey registration and login with a Chromium virtual authenticator (CDP `WebAuthn.addVirtualAuthenticator`), rejection of an unknown authenticator, "Log out" from the verify page, `recovery_admin` reaching Jira without a second step, blocked deep links and path tricks (`/browse/…`, attachments, `%2e%2e` and `..;` traversal behind an open prefix), and the audit log entries.
+Licences come from [Atlassian's timebomb licences](https://developer.atlassian.com/platform/marketplace/timebomb-licenses-for-testing-server-apps/): the "10 user Jira Software Data Center license, expires in 3 hours", or for a Server licence the "10 user starter non-eval host product license, expires in 3 hours" (Jira reports it as `dataCenter: false`, type Starter). For a Java 11 runtime use the image tag `9.12.3-jdk11`; the plain `9.12.3` tag runs Java 17. `e2e.mjs` covers: grace-period offer and postponement, TOTP enrolment with QR code and manual key, recovery codes issued, second step after the next login, wrong code, replayed code, REST blocked for an unverified session (also with a garbage Bearer header), personal access token accepted, Basic authentication allowed during the grace period and refused after enrolment, after the grace period expired (set to 0 days through the admin form) and accepted again for an allow-listed user, recovery code use and single use, lockout after five failures, admin reset behind websudo, an enrolled administrator unable to reach the MFA admin page or UPM before the second step, passkey registration and login with a Chromium virtual authenticator (CDP `WebAuthn.addVirtualAuthenticator`), rejection of an unknown authenticator, "Log out" from the verify page, `recovery_admin` reaching Jira without a second step, blocked deep links and path tricks (`/browse/…`, attachments, `%2e%2e` and `..;` traversal behind an open prefix), and the audit log entries.
 
 ## Open risks for a production rollout
 
-- **Licence type.** `/rest/api/2/serverInfo` reports `deploymentType: Server` even with a Data Center licence (measured on the test instance). Check *Versions & licenses* on the production instance: with a Data Center licence, Jira's own *Authentication methods* page can block Basic authentication too ([Atlassian: allowlist when basic authentication is disabled](https://confluence.atlassian.com/enterprise/creating-an-allowlist-when-basic-authentication-is-disabled-1044106574.html)); with a Server licence that page does not exist and this plugin's Basic block is the only one.
-- **Basic authentication stops at installation, not at the end of the grace period.** The block applies to every user who has or needs a second factor, and with the default "all users" enforcement that is everybody from the first request on. Install the plugin and set groups and the Basic allow-list in one sitting, or decide whether Basic should stay allowed during the grace period (not implemented). Every refused Basic request writes an audit event; a misconfigured script polling Jira fills the audit log (the test's own install script produced 62 events in two minutes).
-- **Lockout.** Every enforced user who loses the factor and the recovery codes needs an administrator. Keep at least two administrators enrolled with two factors each, and document the recovery-mode password in the vault before rollout.
-- **Basic authentication users.** Scripts, CI jobs and integrations that log in with a password stop working for enforced users. Inventory them (Jira access log, `X-AUSERNAME` with Basic) before enabling, switch them to personal access tokens or allow-list the service accounts.
+- **Licence type and Jira's own Basic block.** `/rest/api/2/serverInfo` reports `deploymentType: Server` with both licence types; *Versions & licenses* shows which one is installed. Jira 9.12.3 also ships a global Basic-authentication block ([Atlassian: allowlist when basic authentication is disabled](https://confluence.atlassian.com/enterprise/creating-an-allowlist-when-basic-authentication-is-disabled-1044106574.html)). Atlassian documents it for Data Center, but in the test it also worked with a Server (starter) licence: after `PUT /rest/basicauth/1.0/config` with `block-requests: true`, Basic requests got `403` and allow-listed users still passed. That switch applies to everybody at once; this plugin's rule follows each user's grace period and enrolment. If both are active, a Basic request has to pass both.
+- **Basic authentication stops per user at enrolment or at the end of the grace period.** Scripts running under a personal account break when that person enrols. Every refused Basic request writes an audit event; a misconfigured script polling Jira fills the audit log (an install script polling every two seconds produced 62 events in two minutes in the test).
+- **Lockout.** Every enforced user who loses the factor and the recovery codes needs an administrator. Keep at least two administrators enrolled with two factors each, and store the recovery-mode password in your secrets manager before rollout.
+- **Basic authentication users.** Scripts, CI jobs and integrations that log in with a password stop working for enforced users at the latest when the grace period ends. Inventory them (Jira access log, `X-AUSERNAME` with Basic) before enabling, switch them to personal access tokens or allow-list the service accounts.
 - **Application links (OAuth 1.0a), Jira mobile app, Service Management portal, Confluence/Bitbucket integrations:** not tested; the test image contains neither Service Management nor linked applications. OAuth-authenticated requests are not exempted, so a Jira macro in Confluence acting as an enforced user may be refused. Customer accounts of the Service Management portal are treated like all other users (the portal's own login page leads to the plugin's verify/setup page); exempt the customer group if they should not need a second factor.
 - **PAT detection is coupled to `pats-plugin` internals** (`access.token.request`, verified in `pats-plugin` 1.4.5 of Jira 9.12.3). If a Jira upgrade changes it, token requests are challenged (fail closed) rather than let through; re-test after upgrades.
 - **Data Center clusters:** the attempt limiter and the settings cache are per node. Fine for a single node.
 - **Settings take effect with a delay of up to 5 minutes for running sessions of users who needed no second factor**: that result is cached in the session to avoid database reads on every request. New logins see changes immediately.
 - **Concurrent use of one TOTP code:** replay protection is a read-then-write per user, so two requests with the same code in the same instant can both succeed.
-- **Production runs Java 11?** The build targets Java 11; the test ran on the image's Java 17.

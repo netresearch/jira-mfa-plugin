@@ -1,15 +1,19 @@
 // End-to-end test of the MFA plugin in a real headless Chromium against a
 // running Jira with the plugin installed.
-// Env: JIRA_BASE_URL, JIRA_ADMIN_USER/PASS, JIRA_ADMIN_PAT (admin token for setup calls).
+// Env: JIRA_BASE_URL, JIRA_ADMIN_USER/PASS, JIRA_ADMIN_PAT (admin token for setup calls),
+//      JIRA_RECOVERY_PASS (recovery_admin password; changes settings and is checked itself).
 import { authenticator } from 'otplib';
 import { launch, shot, assert, basicAuth, BASE, ADMIN_USER, ADMIN_PASS } from './lib.mjs';
 
 authenticator.options = { digits: 6, step: 30, window: 0 };
 const ADMIN_PAT = process.env.JIRA_ADMIN_PAT;
 if (!ADMIN_PAT) throw new Error('JIRA_ADMIN_PAT is required');
+const RECOVERY_PASS = process.env.JIRA_RECOVERY_PASS;
+if (!RECOVERY_PASS) throw new Error('JIRA_RECOVERY_PASS is required');
 const RUN = Date.now().toString(36);
 const ALICE = { name: 'alice' + RUN, pass: 'Alice-Pass-' + RUN };
 const BOB = { name: 'bob' + RUN, pass: 'Bob-Pass-' + RUN };
+const CAROL = { name: 'carol' + RUN, pass: 'Carol-Pass-' + RUN };
 
 async function api(method, path, body, headers = {}) {
   const r = await fetch(BASE + path, {
@@ -48,6 +52,27 @@ async function nextFreshCode(secret) {
       return authenticator.generate(secret);
     }
     await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+// Changes plugin settings through the admin form as recovery_admin, who is
+// never challenged and so is unaffected by a grace period of 0 days.
+async function saveSettings(fields) {
+  const c = await browser.newContext();
+  const p = await c.newPage();
+  try {
+    await login(p, { name: 'recovery_admin', pass: RECOVERY_PASS });
+    await p.goto(BASE + '/plugins/servlet/mfa/admin');
+    if (p.url().includes('WebSudo')) {
+      await p.fill('#login-form-authenticatePassword', RECOVERY_PASS);
+      await Promise.all([p.waitForNavigation(), p.click('#login-form-submit')]);
+      if (!p.url().includes('/mfa/admin')) await p.goto(BASE + '/plugins/servlet/mfa/admin');
+    }
+    for (const [id, value] of Object.entries(fields)) await p.fill('#' + id, value);
+    await Promise.all([p.waitForNavigation(), p.click('#save-settings')]);
+    return (await p.locator('#admin-message').innerText()).includes('Settings saved');
+  } finally {
+    await c.close();
   }
 }
 
@@ -165,6 +190,29 @@ try {
   assert(a.status === 401, 'Basic auth with a wrong password is refused');
   a = await api('GET', '/rest/api/2/myself', null, { Authorization: 'Bearer garbage' });
   assert(a.status === 401, 'an invalid PAT is refused');
+
+  // ---- 4b. Basic authentication follows the grace period -----------------------
+  const carolBasic = () => api('GET', '/rest/api/2/myself', null, { Authorization: basicAuth(CAROL.name, CAROL.pass) });
+  await createUser(CAROL);
+  a = await carolBasic();
+  assert(a.status === 200 && a.json().name === CAROL.name, `Basic auth works during the grace period for a user without a factor (HTTP ${a.status})`);
+  assert(await saveSettings({ graceDays: '0' }), 'administrator sets the grace period to 0 days through the admin form');
+  a = await carolBasic();
+  assert(a.status === 401 && a.text.includes('personal access token'), `Basic auth is refused once the grace period has expired (HTTP ${a.status})`);
+  ctx = await browser.newContext();
+  page = await ctx.newPage();
+  await login(page, CAROL);
+  assert(page.url().includes('/plugins/servlet/mfa/setup') && await page.locator('#later').count() === 0,
+    'after the grace period enrolment is mandatory (no "Remind me later")');
+  r = await page.request.get(BASE + '/rest/api/2/myself');
+  assert(r.status() === 401, `after the grace period an unenrolled session cannot use REST (HTTP ${r.status()})`);
+  await ctx.close();
+  assert(await saveSettings({ basicAuthAllowedUsers: CAROL.name }), 'administrator allow-lists carol for Basic auth');
+  a = await carolBasic();
+  assert(a.status === 200, `an allow-listed user keeps Basic auth after the grace period (HTTP ${a.status})`);
+  assert(await saveSettings({ graceDays: '14', basicAuthAllowedUsers: '' }), 'settings restored (14 days, empty allow-list)');
+  a = await carolBasic();
+  assert(a.status === 200, `with the grace period back at 14 days Basic works again for carol (HTTP ${a.status})`);
 
   // ---- 5. recovery code -------------------------------------------------------
   ctx = await browser.newContext();
@@ -288,17 +336,15 @@ try {
   await adminApi('DELETE', '/rest/api/2/user?username=' + BOSS.name);
 
   // ---- 9c. recovery_admin (Jira recovery mode) is never challenged
-  if (process.env.JIRA_RECOVERY_PASS) {
+  {
     ctx = await browser.newContext();
     page = await ctx.newPage();
-    await login(page, { name: 'recovery_admin', pass: process.env.JIRA_RECOVERY_PASS });
+    await login(page, { name: 'recovery_admin', pass: RECOVERY_PASS });
     assert(inJira(page), `recovery_admin reaches Jira in the browser without a second step (at ${page.url()})`);
     r = await page.request.get(BASE + '/plugins/servlet/mfa/admin', { maxRedirects: 0 });
     assert(r.status() === 200 || (r.status() === 302 && (r.headers().location || '').includes('WebSudo')),
       `recovery_admin can open the MFA admin page (HTTP ${r.status()})`);
     await ctx.close();
-  } else {
-    console.log('note - JIRA_RECOVERY_PASS not set, recovery_admin browser login not checked');
   }
 
   // ---- 9. audit log -------------------------------------------------------------------------
@@ -317,7 +363,7 @@ try {
   failed = true;
   console.error(e);
 } finally {
-  for (const u of [ALICE, BOB]) {
+  for (const u of [ALICE, BOB, CAROL]) {
     await adminApi('DELETE', '/rest/api/2/user?username=' + u.name);
   }
   await browser.close();
