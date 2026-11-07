@@ -570,7 +570,38 @@ try {
   const pageC = await ctxC.newPage();
   await login(pageC, DAVE);
   assert(pageC.url().includes('/mfa/verify'), 'dave logs in in a third browser and stops at the second step (passkey left)');
+  // session R: a password login with "Remember my login"; only its remember-me cookie is kept
+  let rememberCookie;
+  {
+    const ctxR = await browser.newContext();
+    const pageR = await ctxR.newPage();
+    await pageR.goto(BASE + '/login.jsp');
+    await pageR.fill('#login-form-username', DAVE.name);
+    await pageR.fill('#login-form-password', DAVE.pass);
+    // the checkbox's label lies over it, so tick it as a user does, through the label
+    await pageR.click('label[for=login-form-remember-me]');
+    assert(await pageR.isChecked('#login-form-remember-me'), '"Remember my login" is ticked');
+    await Promise.all([pageR.waitForNavigation(), pageR.click('#login-form-submit')]);
+    rememberCookie = (await ctxR.cookies(BASE)).find((c) => c.name === 'seraph.rememberme.cookie');
+    await ctxR.close();
+  }
+  assert(!!rememberCookie, 'a login with "Remember my login" sets the remember-me cookie');
+  const rememberOnly = () => rawGet('/secure/Dashboard.jspa',
+    { Cookie: 'seraph.rememberme.cookie=' + rememberCookie.value, Accept: 'text/html' });
+  r = await rememberOnly();
+  assert(r.status === 302 && (r.headers.location || '').includes('/mfa/verify'),
+    `control: the remember-me cookie alone logs dave in before the reset (HTTP ${r.status} ${r.headers.location})`);
   assert(await adminReset(DAVE.name), 'administrator resets dave');
+  r = await rememberOnly();
+  {
+    const loc = r.headers.location || '';
+    const user = r.headers['x-ausername'];
+    assert(!loc.includes('/plugins/servlet/mfa/') && user !== DAVE.name && !r.text.includes(DAVE.name),
+      `after the admin reset the remember-me cookie alone does not log dave in (HTTP ${r.status} ${loc}, X-AUSERNAME ${user})`);
+  }
+  r = await rawGet('/rest/api/2/myself', { Cookie: 'seraph.rememberme.cookie=' + rememberCookie.value, Accept: 'application/json' });
+  assert(r.status === 401 && !r.text.includes(DAVE.name),
+    `after the admin reset the remember-me cookie alone gets no REST access (HTTP ${r.status})`);
   {
     // the first request of session C after the reset, as the browser sends it
     const res = await pageC.goto(BASE + '/plugins/servlet/mfa/setup');
