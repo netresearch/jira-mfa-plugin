@@ -117,11 +117,16 @@ public class WebAuthnServlet extends MfaServletSupport {
                     try {
                         ok = pk.finishAssertion(u.getKey(), stored, body(req));
                     } catch (IOException | IllegalArgumentException e) {
-                        // unreadable or malformed assertion: a failed attempt. Other runtime
-                        // errors are server faults and reach the outer handler (500, logged as
-                        // an error); the attempt counted by beginAttempt stays counted.
+                        // unreadable or malformed assertion: a failed attempt
                         LOG.info("passkey assertion rejected for {}: {}", u.getUsername(), e.toString());
                         ok = false;
+                    } catch (RuntimeException e) {
+                        // A server fault (database, stored data). The attempt beginAttempt counted
+                        // stays counted, so it is audited like a failure; the user gets a 500.
+                        LOG.error("passkey verification of {} failed on the server", u.getUsername(), e);
+                        mfa.attemptFailed(u, admission, "passkey (server error)", req.getRemoteAddr());
+                        json(resp, 500, "{\"error\":\"internal error, try again\"}");
+                        return;
                     }
                     if (!ok) {
                         MfaService.VerifyOutcome o = mfa.attemptFailed(u, admission, "passkey", req.getRemoteAddr());
