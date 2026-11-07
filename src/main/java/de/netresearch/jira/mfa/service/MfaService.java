@@ -55,7 +55,7 @@ public class MfaService {
     private volatile SecretCipher cipher;
     private volatile AttemptLimiter limiter;
     private volatile String limiterConfig = "";
-    /** user key -> {factors changed, cached at} */
+    /** user key -> {factors changed, reset at, cached at}; dropped on every local change */
     private final Map<String, long[]> factorsChanged = new ConcurrentHashMap<>();
 
     @Inject
@@ -191,13 +191,23 @@ public class MfaService {
      * Center cluster see it within {@link #FACTORS_CHANGED_TTL_MILLIS}.
      */
     private long factorsChanged(String userKey) {
+        return cutoffs(userKey)[0];
+    }
+
+    /** Time of the user's last admin reset, 0 if never. Sessions created before it must end. */
+    public long resetAt(String userKey) {
+        return cutoffs(userKey)[1];
+    }
+
+    private long[] cutoffs(String userKey) {
         long now = clock.millis();
         long[] cached = factorsChanged.get(userKey);
-        if (cached != null && now - cached[1] < FACTORS_CHANGED_TTL_MILLIS) {
-            return cached[0];
+        if (cached != null && now - cached[2] < FACTORS_CHANGED_TTL_MILLIS) {
+            return cached;
         }
-        long value = store.factorsChanged(userKey);
-        factorsChanged.put(userKey, new long[]{value, now});
+        long[] stored = store.sessionCutoffs(userKey);
+        long[] value = {stored[0], stored[1], now};
+        factorsChanged.put(userKey, value);
         return value;
     }
 
@@ -214,7 +224,7 @@ public class MfaService {
         boolean keep = keepVerified != null && isVerified(keepVerified.getSession(false), user);
         long now = clock.millis();
         store.setFactorsChanged(user.getKey(), now, !hasFactor(user.getKey()));
-        factorsChanged.put(user.getKey(), new long[]{now, now});
+        factorsChanged.remove(user.getKey());
         if (keep) {
             markVerified(keepVerified, user);
         }
@@ -228,7 +238,7 @@ public class MfaService {
     public void firstFactorAdded(ApplicationUser user) {
         long now = clock.millis();
         store.setFactorsChanged(user.getKey(), now, false);
-        factorsChanged.put(user.getKey(), new long[]{now, now});
+        factorsChanged.remove(user.getKey());
     }
 
     /** True when a factor was added, removed or reset at or after {@code millis}. */
@@ -478,7 +488,7 @@ public class MfaService {
     public void adminReset(ApplicationUser admin, ApplicationUser target) {
         long now = clock.millis();
         store.resetUser(target.getKey(), now);
-        factorsChanged.put(target.getKey(), new long[]{now, now});
+        factorsChanged.remove(target.getKey());
         limiter().reset(target.getKey());
         audit.log(AuditLogger.Action.ADMIN_RESET, target, Map.of("administrator", admin.getUsername()));
     }

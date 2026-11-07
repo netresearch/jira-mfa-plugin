@@ -68,7 +68,7 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 |---|---|---|
 | Active | on | Off = no checks at all. |
 | Groups that must use a second factor | empty = all users | One group per line. Users outside these groups are not forced, but once they enrol they are always challenged. |
-| Exempt groups / exempt users | empty | Never challenged, even with a factor. Use for emergencies, not as a standing policy. |
+| Exempt groups / exempt users | empty | Never challenged, even with a factor; a password-only session can then also change the user's factors (see "Use"). Use for emergencies, not as a standing policy. |
 | Grace period | 14 days | Counted from the first request at which the user is enforced and has no factor. Users who become enforced later, for example when the group list is widened, get the full period from then. A grace period that has started is not restarted by leaving and re-entering an enforced group; removing one's last factor (possible only while not enforced) or an admin reset clears it, and it starts again at the next request as an enforced user. 0 = enrol at the next login. |
 | HTTP Basic authentication | Block | Block for users who have a factor or whose grace period has expired. |
 | Users still allowed to use Basic | empty | Service accounts and scripts that cannot use a token yet. `*` allows everyone. |
@@ -79,18 +79,18 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 ## Use
 
 - Users manage their factors at *Profile menu > Two-step verification* (`/plugins/servlet/mfa/setup`): add an authenticator app (QR code or manual key), add passkeys or security keys, remove factors (the last factor of an enforced user cannot be removed) and create new recovery codes.
-- A session that has not passed the second step can open the setup page only while the user has no factor at all. Otherwise somebody holding only the password could add their own authenticator.
+- A session that has not passed the second step can open the setup page only while the user has no factor at all, or while the user needs no second step (exempt, or *Active* unchecked). Otherwise somebody holding only the password could add their own authenticator. In the second case a password-only session can manage the user's factors: if the password may be known to someone else, change it and reset the user before lifting an exemption or re-activating.
 
 ## Lockout and emergencies
 
 ### A user lost their phone or key
 
 1. If the user still has recovery codes: they enter one instead of the TOTP code and then add a new factor and create new recovery codes on the setup page.
-2. Otherwise an administrator opens `/plugins/servlet/mfa/admin`, looks up the username and presses *Remove all second factors*. That deletes the user's TOTP secret, passkeys and recovery codes, clears a lockout and ends every session verified with the old factors. Personal access tokens are not touched: revoke the user's tokens as well, or a token created from a session verified with the lost factor keeps working. The grace period starts again at the user's next request (if the user is enforced), so the user can log in with the password and enrol again. Confirm the user's identity out of band before resetting: the reset reduces the account to its password.
+2. Otherwise an administrator opens `/plugins/servlet/mfa/admin`, looks up the username and presses *Remove all second factors*. That deletes the user's TOTP secret, passkeys and recovery codes, clears a lockout and ends every session of the user that existed before the reset (verified or not; pages are sent to the login page, REST gets `401`). Personal access tokens are not touched: revoke the user's tokens as well, or a token created from a session verified with the lost factor keeps working. The grace period starts again at the user's next request (if the user is enforced), so the user can log in with the password and enrol again. Confirm the user's identity out of band before resetting: the reset reduces the account to its password.
 
 ### A user is locked out after failed attempts
 
-Wait for the lockout period (default 15 minutes), or have an administrator reset the user (which also removes the factors), or restart Jira (the counter is in memory). If the user did not make the failed attempts, someone else knows the password: change the password first. A reset without a password change hands the account to whoever enrols first.
+Wait for the lockout period (default 15 minutes), or have an administrator reset the user (which also removes the factors), or restart Jira (the counter is in memory). If the user did not make the failed attempts, someone else knows the password: change the password first, then reset. The reset ends every session of the user that existed before it, verified or not, so a session opened with the old password cannot enrol a factor afterwards.
 
 ### All administrators are locked out
 

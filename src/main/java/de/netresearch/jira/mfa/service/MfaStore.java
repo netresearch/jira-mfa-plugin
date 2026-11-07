@@ -183,13 +183,14 @@ public class MfaStore {
             ao.deleteWithSQL(MfaUser.class, "USER_KEY = ?", userKey);
             // FIRST_SEEN 0: the grace period starts at the user's next request as an enforced user
             ao.create(MfaUser.class, new DBParam("USER_KEY", userKey), new DBParam("FIRST_SEEN", 0L),
-                    new DBParam("FACTORS_CHANGED", now));
+                    new DBParam("FACTORS_CHANGED", now), new DBParam("RESET_AT", now));
             return null;
         });
     }
 
-    public long factorsChanged(String userKey) {
-        return findUser(userKey).map(MfaUser::getFactorsChanged).orElse(0L);
+    /** {last factor change, last admin reset}, both 0 when unknown. */
+    public long[] sessionCutoffs(String userKey) {
+        return findUser(userKey).map(u -> new long[]{u.getFactorsChanged(), u.getResetAt()}).orElse(new long[]{0L, 0L});
     }
 
     /** Records a factor removal; {@code clearGrace} resets the grace period to "not started". */

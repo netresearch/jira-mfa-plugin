@@ -566,9 +566,22 @@ try {
   assert(r.status() === 302 && (r.headers().location || '').includes('/mfa/verify'),
     `the other session is sent to the second step again (HTTP ${r.status()} ${r.headers().location || ''})`);
   assert(await adminReset(DAVE.name), 'administrator resets dave');
+  // The reset ends every session that existed before it, verified (A) or not (B).
   r = await pageA.request.get(BASE + '/secure/Dashboard.jspa', { maxRedirects: 0, headers: { Accept: 'text/html' } });
-  assert(r.status() === 302 && (r.headers().location || '').includes('/mfa/setup'),
-    `after the admin reset the remaining verified session is sent to enrolment (HTTP ${r.status()} ${r.headers().location || ''})`);
+  assert(r.status() === 302 && (r.headers().location || '').includes('/login.jsp'),
+    `after the admin reset the verified session is sent to the login page (HTTP ${r.status()} ${r.headers().location || ''})`);
+  r = await pageB.request.get(BASE + '/plugins/servlet/mfa/setup', { maxRedirects: 0, headers: { Accept: 'text/html' } });
+  assert(r.status() === 302 && (r.headers().location || '').includes('/login.jsp'),
+    `after the admin reset an unverified session cannot reach enrolment (HTTP ${r.status()} ${r.headers().location || ''})`);
+  s = await myselfStatus(pageA);
+  assert(s === 401, `the ended session is no longer logged in for REST (HTTP ${s})`);
+  {
+    const fresh = await browser.newContext();
+    const pageC = await fresh.newPage();
+    await login(pageC, DAVE);
+    assert(pageC.url().includes('/plugins/servlet/mfa/setup'), 'a new login after the reset is offered enrolment');
+    await fresh.close();
+  }
   await ctxA.close();
   await ctxB.close();
 

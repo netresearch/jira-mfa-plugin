@@ -42,6 +42,14 @@ public interface MfaUser extends Entity {
 
     void setFactorsChanged(long factorsChanged);
 
+    /**
+     * Time of the last admin reset (epoch millis, 0 = never). Every session
+     * created before it ends, verified or not.
+     */
+    long getResetAt();
+
+    void setResetAt(long resetAt);
+
     /** Random WebAuthn user handle (base64url), created on first passkey registration. */
     @Indexed
     String getUserHandle();

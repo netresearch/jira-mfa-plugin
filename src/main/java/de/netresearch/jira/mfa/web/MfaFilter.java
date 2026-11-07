@@ -98,12 +98,24 @@ public class MfaFilter implements Filter {
             case ERROR:
                 MfaServletSupport.json(resp, 503, "{\"errorMessages\":[\"Two-step verification is temporarily unavailable.\"]}");
                 return;
+            case RELOGIN:
+                HttpSession old = req.getSession(false);
+                if (old != null) {
+                    old.invalidate();
+                }
+                String path = RequestClassifier.dispatchPath(req.getServletPath(), req.getPathInfo());
+                if (isApi(req, path) || !"GET".equalsIgnoreCase(req.getMethod())) {
+                    MfaServletSupport.json(resp, 401, "{\"errorMessages\":[\"Your session was ended by an administrator. Log in again.\"]}");
+                } else {
+                    resp.sendRedirect(req.getContextPath() + "/login.jsp");
+                }
+                return;
             default:
                 challenge(req, resp, d);
         }
     }
 
-    enum Decision { PASS, VERIFY, ENROL, BASIC_BLOCKED, ERROR }
+    enum Decision { PASS, VERIFY, ENROL, BASIC_BLOCKED, ERROR, RELOGIN }
 
     Decision decide(HttpServletRequest req, ApplicationUser user) {
         if (req.getAttribute(PAT_ATTRIBUTE) != null) {
@@ -123,6 +135,11 @@ public class MfaFilter implements Filter {
             }
             // a Basic header for someone else, or one whose password Seraph did not accept
             // (the user then comes from a session or remember-me cookie): treat as a session request
+        }
+        if (session != null && session.getCreationTime() < mfa.resetAt(user.getKey())) {
+            // An admin reset ends every session that existed before it, verified or not:
+            // otherwise a session of whoever caused the reset could enrol its own factor first.
+            return Decision.RELOGIN;
         }
         if (mfa.isVerified(session, user)) {
             return Decision.PASS;
