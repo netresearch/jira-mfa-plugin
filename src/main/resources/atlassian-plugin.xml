@@ -36,6 +36,9 @@
     <servlet key="mfa-admin" class="de.netresearch.jira.mfa.web.AdminServlet">
         <url-pattern>/mfa/admin</url-pattern>
     </servlet>
+    <servlet key="mfa-admin-users" class="de.netresearch.jira.mfa.web.UsersServlet">
+        <url-pattern>/mfa/admin/users</url-pattern>
+    </servlet>
 
     <web-resource key="mfa-assets" name="MFA page script">
         <resource type="download" name="mfa.js" location="static/mfa.js"/>
@@ -48,5 +51,10 @@
     <web-item key="mfa-admin-link" section="system.admin/security" weight="200">
         <label>Two-step verification</label>
         <link linkId="mfa-admin-link">/plugins/servlet/mfa/admin</link>
+    </web-item>
+    <!-- User management, next to Users and Groups -->
+    <web-item key="mfa-admin-users-link" section="admin_users_menu/users_groups_section" weight="200">
+        <label>Two-step verification</label>
+        <link linkId="mfa-admin-users-link">/plugins/servlet/mfa/admin/users</link>
     </web-item>
 </atlassian-plugin>

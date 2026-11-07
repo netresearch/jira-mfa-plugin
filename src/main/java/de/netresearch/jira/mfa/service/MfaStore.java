@@ -11,7 +11,9 @@ import net.java.ao.Query;
 import javax.inject.Inject;
 import javax.inject.Named;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /** Active Objects persistence for MFA state. */
@@ -218,6 +220,33 @@ public class MfaStore {
             });
             return null;
         });
+    }
+
+    /** Every state row by user key, in one query (administrators' overview). */
+    public Map<String, MfaUser> allUsers() {
+        Map<String, MfaUser> m = new HashMap<>();
+        for (MfaUser u : ao.find(MfaUser.class)) {
+            m.put(u.getUserKey(), u);
+        }
+        return m;
+    }
+
+    /** Number of passkeys per user key, in one query. */
+    public Map<String, Integer> passkeyCounts() {
+        Map<String, Integer> m = new HashMap<>();
+        for (MfaPasskey p : ao.find(MfaPasskey.class, Query.select("ID, " + USER_KEY))) {
+            m.merge(p.getUserKey(), 1, Integer::sum);
+        }
+        return m;
+    }
+
+    /** Number of unused recovery codes per user key, in one query. */
+    public Map<String, Integer> recoveryCodeCounts() {
+        Map<String, Integer> m = new HashMap<>();
+        for (MfaRecoveryCode c : ao.find(MfaRecoveryCode.class, Query.select("ID, " + USER_KEY))) {
+            m.merge(c.getUserKey(), 1, Integer::sum);
+        }
+        return m;
     }
 
     public int countEnrolledUsers() {

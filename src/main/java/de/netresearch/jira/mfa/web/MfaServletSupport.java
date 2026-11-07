@@ -3,6 +3,9 @@ package de.netresearch.jira.mfa.web;
 import com.atlassian.jira.component.ComponentAccessor;
 import com.atlassian.jira.security.xsrf.XsrfTokenGenerator;
 import com.atlassian.jira.user.ApplicationUser;
+import com.atlassian.sal.api.websudo.WebSudoManager;
+import com.atlassian.sal.api.websudo.WebSudoSessionException;
+import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
 import de.netresearch.jira.mfa.service.MfaService;
 
 import javax.servlet.http.HttpServlet;
@@ -34,6 +37,40 @@ abstract class MfaServletSupport extends HttpServlet {
         if (u == null) {
             String here = req.getServletPath() + (req.getPathInfo() == null ? "" : req.getPathInfo());
             resp.sendRedirect(req.getContextPath() + "/login.jsp?os_destination=" + URLEncoder.encode(here, StandardCharsets.UTF_8));
+        }
+        return u;
+    }
+
+    /**
+     * The current user if a system administrator in a verified, secure
+     * administrator session (websudo); otherwise answers the request and
+     * returns null.
+     */
+    ApplicationUser requireAdmin(HttpServletRequest req, HttpServletResponse resp, WebSudoManager webSudo) throws IOException {
+        ApplicationUser u = requireUser(req, resp);
+        if (u == null) {
+            return null;
+        }
+        if (!mfa.env().isSysAdmin(u)) {
+            resp.sendError(HttpServletResponse.SC_FORBIDDEN, "System administrators only.");
+            return null;
+        }
+        // Defence in depth (the filter already requires this): an administrator
+        // who has or must have a factor needs a verified session here.
+        Requirement r = mfa.requirement(u);
+        if ((r == Requirement.VERIFY || r == Requirement.ENROL_REQUIRED) && !mfa.isVerified(req.getSession(false), u)) {
+            resp.sendRedirect(req.getContextPath() + SERVLET + (r == Requirement.VERIFY ? "/verify" : "/setup"));
+            return null;
+        }
+        try {
+            webSudo.willExecuteWebSudoRequest(req);
+        } catch (WebSudoSessionException e) {
+            webSudo.enforceWebSudoProtection(req, resp);
+            return null;
+        }
+        if (!webSudo.canExecuteRequest(req)) {
+            webSudo.enforceWebSudoProtection(req, resp);
+            return null;
         }
         return u;
     }
