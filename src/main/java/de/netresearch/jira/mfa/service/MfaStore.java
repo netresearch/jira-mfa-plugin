@@ -17,6 +17,8 @@ import java.util.Optional;
 /** Active Objects persistence for MFA state. */
 @Named
 public class MfaStore {
+    private static final String USER_KEY = "USER_KEY";
+    private static final String BY_USER = USER_KEY + " = ?";
     private final ActiveObjects ao;
 
     @Inject
@@ -25,14 +27,53 @@ public class MfaStore {
     }
 
     public Optional<MfaUser> findUser(String userKey) {
-        MfaUser[] found = ao.find(MfaUser.class, Query.select().where("USER_KEY = ?", userKey));
+        MfaUser[] found = ao.find(MfaUser.class, Query.select().where(BY_USER, userKey));
         return found.length == 0 ? Optional.empty() : Optional.of(found[0]);
     }
 
-    /** Returns the state row, creating it (first seen = now) when missing. */
-    public MfaUser getOrCreateUser(String userKey, long now) {
-        return ao.executeInTransaction(() -> findUser(userKey).orElseGet(() ->
-                ao.create(MfaUser.class, new DBParam("USER_KEY", userKey), new DBParam("FIRST_SEEN", now))));
+    /**
+     * The state row inside a write transaction. The row is created beforehand by
+     * {@link #getOrCreateUser} in a transaction of its own: a failed insert inside
+     * an enclosing transaction would abort it on PostgreSQL.
+     */
+    private MfaUser existingUser(String userKey) {
+        return findUser(userKey).orElseThrow(() -> new IllegalStateException("no MFA state row for " + userKey));
+    }
+
+    /**
+     * Returns the state row, creating it when missing. Call it outside other
+     * transactions (see {@link #existingUser}). A new row has no grace
+     * period yet (first seen = 0); {@link #startGrace} starts it.
+     * Parallel first requests of a user race on the unique user key; the loser
+     * reads the winner's row instead of failing.
+     */
+    public MfaUser getOrCreateUser(String userKey) {
+        Optional<MfaUser> existing = findUser(userKey);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        try {
+            return ao.executeInTransaction(() -> findUser(userKey).orElseGet(() ->
+                    ao.create(MfaUser.class, new DBParam(USER_KEY, userKey), new DBParam("FIRST_SEEN", 0L))));
+        } catch (RuntimeException e) {
+            return findUser(userKey).orElseThrow(() -> e);
+        }
+    }
+
+    /** Starts the user's grace period at {@code now} unless it has started already; returns its start. */
+    public long startGrace(String userKey, long now) {
+        MfaUser u = getOrCreateUser(userKey);
+        if (u.getFirstSeen() > 0) {
+            return u.getFirstSeen();
+        }
+        return ao.executeInTransaction(() -> {
+            MfaUser row = findUser(userKey).orElseThrow(IllegalStateException::new);
+            if (row.getFirstSeen() == 0) {
+                row.setFirstSeen(now);
+                row.save();
+            }
+            return row.getFirstSeen();
+        });
     }
 
     public Optional<MfaUser> findUserByHandle(String handle) {
@@ -41,8 +82,9 @@ public class MfaStore {
     }
 
     public void setTotp(String userKey, String encryptedSecret, long lastStep) {
+        getOrCreateUser(userKey);
         ao.executeInTransaction(() -> {
-            MfaUser u = getOrCreateUser(userKey, System.currentTimeMillis());
+            MfaUser u = existingUser(userKey);
             u.setTotpSecret(encryptedSecret);
             u.setTotpLastStep(lastStep);
             u.save();
@@ -61,8 +103,9 @@ public class MfaStore {
     }
 
     public void setUserHandle(String userKey, String handle) {
+        getOrCreateUser(userKey);
         ao.executeInTransaction(() -> {
-            MfaUser u = getOrCreateUser(userKey, System.currentTimeMillis());
+            MfaUser u = existingUser(userKey);
             u.setUserHandle(handle);
             u.save();
             return null;
@@ -70,7 +113,7 @@ public class MfaStore {
     }
 
     public List<MfaPasskey> passkeys(String userKey) {
-        return Arrays.asList(ao.find(MfaPasskey.class, Query.select().where("USER_KEY = ?", userKey).order("ID")));
+        return Arrays.asList(ao.find(MfaPasskey.class, Query.select().where(BY_USER, userKey).order("ID")));
     }
 
     public Optional<MfaPasskey> passkeyByCredentialId(String credentialId) {
@@ -84,7 +127,7 @@ public class MfaStore {
 
     public void addPasskey(String userKey, String credentialId, String publicKeyCose, long signatureCount, String label, long now) {
         ao.executeInTransaction(() -> ao.create(MfaPasskey.class,
-                new DBParam("USER_KEY", userKey),
+                new DBParam(USER_KEY, userKey),
                 new DBParam("CREDENTIAL_ID", credentialId),
                 new DBParam("PUBLIC_KEY_COSE", publicKeyCose),
                 new DBParam("SIGNATURE_COUNT", signatureCount),
@@ -116,14 +159,14 @@ public class MfaStore {
     }
 
     public List<MfaRecoveryCode> recoveryCodes(String userKey) {
-        return Arrays.asList(ao.find(MfaRecoveryCode.class, Query.select().where("USER_KEY = ?", userKey)));
+        return Arrays.asList(ao.find(MfaRecoveryCode.class, Query.select().where(BY_USER, userKey)));
     }
 
     public void replaceRecoveryCodes(String userKey, List<String> hashes) {
         ao.executeInTransaction(() -> {
-            ao.deleteWithSQL(MfaRecoveryCode.class, "USER_KEY = ?", userKey);
+            ao.deleteWithSQL(MfaRecoveryCode.class, BY_USER, userKey);
             for (String h : hashes) {
-                ao.create(MfaRecoveryCode.class, new DBParam("USER_KEY", userKey), new DBParam("CODE_HASH", h));
+                ao.create(MfaRecoveryCode.class, new DBParam(USER_KEY, userKey), new DBParam("CODE_HASH", h));
             }
             return null;
         });
@@ -134,13 +177,34 @@ public class MfaStore {
         return ao.executeInTransaction(() -> ao.deleteWithSQL(MfaRecoveryCode.class, "ID = ?", id) == 1);
     }
 
-    /** Removes every factor and recovery code and restarts the grace period. */
+    /** Removes every factor and recovery code, clears the grace period and invalidates verified sessions. */
     public void resetUser(String userKey, long now) {
         ao.executeInTransaction(() -> {
-            ao.deleteWithSQL(MfaPasskey.class, "USER_KEY = ?", userKey);
-            ao.deleteWithSQL(MfaRecoveryCode.class, "USER_KEY = ?", userKey);
-            ao.deleteWithSQL(MfaUser.class, "USER_KEY = ?", userKey);
-            ao.create(MfaUser.class, new DBParam("USER_KEY", userKey), new DBParam("FIRST_SEEN", now));
+            ao.deleteWithSQL(MfaPasskey.class, BY_USER, userKey);
+            ao.deleteWithSQL(MfaRecoveryCode.class, BY_USER, userKey);
+            ao.deleteWithSQL(MfaUser.class, BY_USER, userKey);
+            // FIRST_SEEN 0: the grace period starts at the user's next request as an enforced user
+            ao.create(MfaUser.class, new DBParam(USER_KEY, userKey), new DBParam("FIRST_SEEN", 0L),
+                    new DBParam("FACTORS_CHANGED", now), new DBParam("RESET_AT", now));
+            return null;
+        });
+    }
+
+    /** {last factor change, last admin reset}, both 0 when unknown. */
+    public long[] sessionCutoffs(String userKey) {
+        return findUser(userKey).map(u -> new long[]{u.getFactorsChanged(), u.getResetAt()}).orElse(new long[]{0L, 0L});
+    }
+
+    /** Records a factor removal; {@code clearGrace} resets the grace period to "not started". */
+    public void setFactorsChanged(String userKey, long now, boolean clearGrace) {
+        getOrCreateUser(userKey);
+        ao.executeInTransaction(() -> {
+            MfaUser u = existingUser(userKey);
+            u.setFactorsChanged(now);
+            if (clearGrace) {
+                u.setFirstSeen(0L);
+            }
+            u.save();
             return null;
         });
     }

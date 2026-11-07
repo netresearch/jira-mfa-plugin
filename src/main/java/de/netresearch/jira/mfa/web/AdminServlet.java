@@ -44,7 +44,7 @@ public class AdminServlet extends MfaServletSupport {
         // Defence in depth (the filter already requires this): an administrator
         // who has or must have a factor needs a verified session here.
         Requirement r = mfa.requirement(u);
-        if ((r == Requirement.VERIFY || r == Requirement.ENROL_REQUIRED) && !MfaService.isVerified(req.getSession(false), u)) {
+        if ((r == Requirement.VERIFY || r == Requirement.ENROL_REQUIRED) && !mfa.isVerified(req.getSession(false), u)) {
             resp.sendRedirect(req.getContextPath() + SERVLET + (r == Requirement.VERIFY ? "/verify" : "/setup"));
             return null;
         }
@@ -106,7 +106,7 @@ public class AdminServlet extends MfaServletSupport {
             } else {
                 mfa.adminReset(admin, target);
                 message = "All second factors and recovery codes of " + target.getUsername()
-                        + " were removed. The grace period starts again now.";
+                        + " were removed. The grace period starts again at the user's next request.";
             }
         }
         render(req, resp, error, message, lookup);
@@ -137,11 +137,11 @@ public class AdminServlet extends MfaServletSupport {
                 b.append("<table id=\"user-status\"><tbody>")
                         .append(row("User", t.getUsername() + " (" + t.getDisplayName() + ")"))
                         .append(row("Second factor enforced", mfa.isEnforced(t) ? "yes" : "no"))
-                        .append(row("Requirement now", mfa.requirement(t).name()))
+                        .append(row("Requirement now", mfa.requirementPreview(t).name()))
                         .append(row("Authenticator app", totp ? "yes" : "no"))
                         .append(row("Passkeys", Integer.toString(passkeys)))
                         .append(row("Unused recovery codes", Integer.toString(mfa.remainingRecoveryCodes(key))))
-                        .append(row("Grace period ends", DATE.format(EnforcementPolicy.graceEnd(s, mfa.firstSeen(key)))))
+                        .append(row("Grace period ends", mfa.graceEndIfStarted(key).map(DATE::format).orElse("not started")))
                         .append(row("Locked until", locked == null ? "-" : locked.toString()))
                         .append("</tbody></table>")
                         .append("<form method=\"post\">").append(csrfField(req)).append(Html.hidden("action", "reset"))

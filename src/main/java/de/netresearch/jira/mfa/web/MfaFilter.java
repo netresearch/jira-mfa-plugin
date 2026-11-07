@@ -2,6 +2,7 @@ package de.netresearch.jira.mfa.web;
 
 import com.atlassian.jira.user.ApplicationUser;
 import de.netresearch.jira.mfa.core.BasicAuthRule;
+import de.netresearch.jira.mfa.core.LogText;
 import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
 import de.netresearch.jira.mfa.core.RequestClassifier;
 import de.netresearch.jira.mfa.core.RequestClassifier.AuthScheme;
@@ -68,7 +69,9 @@ public class MfaFilter implements Filter {
         try {
             user = mfa.env().currentUser();
         } catch (RuntimeException e) {
-            chain.doFilter(request, response);
+            // Fail closed, as below: without the user the second step cannot be checked.
+            LOG.error("MFA check could not determine the user on {}", LogText.clean(req.getRequestURI()), e);
+            MfaServletSupport.json(resp, 503, "{\"errorMessages\":[\"Two-step verification is temporarily unavailable.\"]}");
             return;
         }
         if (user == null) {
@@ -80,7 +83,7 @@ public class MfaFilter implements Filter {
             d = decide(req, user);
         } catch (RuntimeException e) {
             // Fail closed: an error in the plugin must not silently disable the second factor.
-            LOG.error("MFA check failed for {} on {}", user.getUsername(), req.getRequestURI(), e);
+            LOG.error("MFA check failed for {} on {}", LogText.clean(user.getUsername()), LogText.clean(req.getRequestURI()), e);
             d = Decision.ERROR;
         }
         switch (d) {
@@ -96,12 +99,28 @@ public class MfaFilter implements Filter {
             case ERROR:
                 MfaServletSupport.json(resp, 503, "{\"errorMessages\":[\"Two-step verification is temporarily unavailable.\"]}");
                 return;
+            case RELOGIN:
+                HttpSession old = req.getSession(false);
+                if (old != null) {
+                    try {
+                        old.invalidate();
+                    } catch (IllegalStateException alreadyInvalidated) {
+                        // a parallel request of the same session ended it first
+                    }
+                }
+                String path = RequestClassifier.dispatchPath(req.getServletPath(), req.getPathInfo());
+                if (isApi(req, path) || !"GET".equalsIgnoreCase(req.getMethod())) {
+                    MfaServletSupport.json(resp, 401, "{\"errorMessages\":[\"Your session was ended by an administrator. Log in again.\"]}");
+                } else {
+                    resp.sendRedirect(req.getContextPath() + "/login.jsp");
+                }
+                return;
             default:
                 challenge(req, resp, d);
         }
     }
 
-    enum Decision { PASS, VERIFY, ENROL, BASIC_BLOCKED, ERROR }
+    enum Decision { PASS, VERIFY, ENROL, BASIC_BLOCKED, ERROR, RELOGIN }
 
     Decision decide(HttpServletRequest req, ApplicationUser user) {
         if (req.getAttribute(PAT_ATTRIBUTE) != null) {
@@ -114,15 +133,20 @@ public class MfaFilter implements Filter {
         AuthScheme scheme = RequestClassifier.scheme(req.getHeader("Authorization"));
         HttpSession session = req.getSession(false);
         if (scheme == AuthScheme.BASIC) {
-            // Seraph has already checked the password (a wrong one is answered 401 before this filter).
             boolean sameUser = user.getUsername().equalsIgnoreCase(basicUser(req.getHeader("Authorization")));
-            if (sameUser) {
+            if (sameUser && basicPasswordChecked(req)) {
                 return BasicAuthRule.allows(mfa.settings(), user.getUsername(), mfa.requirement(user))
                         ? Decision.PASS : Decision.BASIC_BLOCKED;
             }
-            // a Basic header for someone else on top of a session: treat as a session request
+            // a Basic header for someone else, or one whose password Seraph did not accept
+            // (the user then comes from a session or remember-me cookie): treat as a session request
         }
-        if (MfaService.isVerified(session, user)) {
+        if (session != null && session.getCreationTime() < mfa.resetAt(user.getKey())) {
+            // An admin reset ends every session that existed before it, verified or not:
+            // otherwise a session of whoever caused the reset could enrol its own factor first.
+            return Decision.RELOGIN;
+        }
+        if (mfa.isVerified(session, user)) {
             return Decision.PASS;
         }
         if (RequestClassifier.isOpen(path) && !RequestClassifier.hasEncodedSeparators(req.getRequestURI())) {
@@ -152,11 +176,33 @@ public class MfaFilter implements Filter {
         }
     }
 
+    /** Request attribute Seraph's login filter sets to the result of its login attempt (BaseLoginFilter.OS_AUTHSTATUS_KEY). */
+    static final String SERAPH_AUTH_STATUS = "os_authstatus";
+    static final String SERAPH_LOGIN_SUCCESS = "success";
+
+    /**
+     * True when Seraph checked the Basic header's password in this request and
+     * accepted it. Seraph 4.2 (Jira 9.12) authenticates a Basic header on every
+     * request, also when a session exists, and records the outcome as
+     * {@code os_authstatus}. With a wrong password the request may still carry
+     * the user of a session or remember-me cookie; a forged {@code user:anything}
+     * header must not turn such a session, which may never have passed the
+     * second step, into a Basic request.
+     */
+    static boolean basicPasswordChecked(HttpServletRequest req) {
+        return SERAPH_LOGIN_SUCCESS.equals(req.getAttribute(SERAPH_AUTH_STATUS));
+    }
+
     static final String S_NONE_UNTIL = "de.netresearch.jira.mfa.noneUntil";
     /** How long a "no second factor needed" result is reused within a session. */
     static final long NONE_CACHE_MILLIS = 5 * 60 * 1000L;
 
-    private static boolean noneCached(HttpSession session, ApplicationUser user) {
+    /**
+     * True while the session's "no second factor needed" result is fresh and
+     * no factor was added since it was cached (a password-only session of an
+     * attacker must not keep passing after the user enrols).
+     */
+    private boolean noneCached(HttpSession session, ApplicationUser user) {
         Object v = session.getAttribute(S_NONE_UNTIL);
         if (!(v instanceof String)) {
             return false;
@@ -167,7 +213,9 @@ public class MfaFilter implements Filter {
             return false;
         }
         try {
-            return System.currentTimeMillis() < Long.parseLong(s.substring(bar + 1));
+            long until = Long.parseLong(s.substring(bar + 1));
+            return System.currentTimeMillis() < until
+                    && !mfa.factorsChangedSince(user.getKey(), until - NONE_CACHE_MILLIS);
         } catch (NumberFormatException e) {
             return false;
         }

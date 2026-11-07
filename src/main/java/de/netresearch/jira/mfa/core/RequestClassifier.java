@@ -16,17 +16,22 @@ public final class RequestClassifier {
             MFA_PREFIX + "verify",
             MFA_PREFIX + "setup",
             MFA_PREFIX + "webauthn/",
-            "/s/",                       // cached static resources
-            "/download/resources/",
-            "/download/batch/",
-            "/download/contextbatch/",
-            "/images/",
-            "/static-assets/",
             "/favicon.ico",
             "/status",
             "/logout",
             "/secure/Logout",
             "/login.jsp");
+
+    /** Static resources, open directly or behind Jira's cache prefix {@code /s/<keys>/_/}. */
+    private static final List<String> STATIC_PREFIXES = List.of(
+            "/download/resources/",
+            "/download/batch/",
+            "/download/contextbatch/",
+            "/images/",
+            "/static-assets/");
+
+    private static final String CACHE_PREFIX = "/s/";
+    private static final String CACHE_SEPARATOR = "/_/";
 
     private RequestClassifier() {
     }
@@ -67,7 +72,23 @@ public final class RequestClassifier {
             return false;
         }
         for (String p : OPEN_PREFIXES) {
-            if (path.equals(p) || path.startsWith(p)) {
+            if (path.startsWith(p)) {
+                return true;
+            }
+        }
+        if (path.startsWith(CACHE_PREFIX)) {
+            // Jira's URL rewriting forwards /s/<keys>/_/<path> to <path>; open only
+            // when that target is itself a static resource, so the result does not
+            // depend on the filter seeing the forward.
+            int sep = path.indexOf(CACHE_SEPARATOR);
+            if (sep < 0 || sep != path.lastIndexOf(CACHE_SEPARATOR)) {
+                // none, or several: the rewrite may split at either, so do not guess
+                return false;
+            }
+            path = path.substring(sep + CACHE_SEPARATOR.length() - 1);
+        }
+        for (String p : STATIC_PREFIXES) {
+            if (path.startsWith(p)) {
                 return true;
             }
         }

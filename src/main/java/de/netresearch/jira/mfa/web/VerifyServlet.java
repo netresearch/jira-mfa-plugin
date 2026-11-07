@@ -28,7 +28,7 @@ public class VerifyServlet extends MfaServletSupport {
         if (u == null) {
             return;
         }
-        if (MfaService.isVerified(req.getSession(false), u) || mfa.requirement(u) != Requirement.VERIFY) {
+        if (mfa.isVerified(req.getSession(false), u) || mfa.requirement(u) != Requirement.VERIFY) {
             resp.sendRedirect(takeReturnUrl(req));
             return;
         }
@@ -48,7 +48,7 @@ public class VerifyServlet extends MfaServletSupport {
         MfaService.VerifyOutcome outcome = mfa.verifySecondStep(u, req.getParameter("code"), req.getRemoteAddr());
         if (outcome == MfaService.VerifyOutcome.OK) {
             String target = takeReturnUrl(req);
-            MfaService.markVerified(req, u);
+            mfa.markVerified(req, u);
             resp.sendRedirect(target);
             return;
         }

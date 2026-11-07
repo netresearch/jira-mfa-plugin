@@ -2,6 +2,8 @@ package de.netresearch.jira.mfa.web;
 
 import com.atlassian.jira.user.ApplicationUser;
 import com.yubico.webauthn.exception.RegistrationFailedException;
+import de.netresearch.jira.mfa.core.AttemptLimiter;
+import de.netresearch.jira.mfa.core.LogText;
 import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
 import de.netresearch.jira.mfa.core.RequestClassifier;
 import de.netresearch.jira.mfa.service.MfaService;
@@ -55,35 +57,35 @@ public class WebAuthnServlet extends MfaServletSupport {
         try {
             switch (path) {
                 case "/webauthn/register/options":
-                    if (r == Requirement.VERIFY && !MfaService.isVerified(session, u)) {
+                    if (r == Requirement.VERIFY && !mfa.isVerified(session, u)) {
                         json(resp, 403, "{\"error\":\"verify first\"}");
                         return;
                     }
                     String regRequest = pk.startRegistration(u.getKey(), u.getUsername(), u.getDisplayName());
-                    session.setAttribute(MfaService.S_REG_REQUEST, regRequest);
+                    MfaService.putForUser(session, MfaService.S_REG_REQUEST, u.getKey(), regRequest);
                     json(resp, 200, PasskeyService.creationJson(regRequest));
                     return;
                 case "/webauthn/register/finish": {
-                    if (r == Requirement.VERIFY && !MfaService.isVerified(session, u)) {
+                    if (r == Requirement.VERIFY && !mfa.isVerified(session, u)) {
                         json(resp, 403, "{\"error\":\"verify first\"}");
                         return;
                     }
-                    Object stored = session.getAttribute(MfaService.S_REG_REQUEST);
-                    session.removeAttribute(MfaService.S_REG_REQUEST);
-                    if (!(stored instanceof String)) {
+                    String stored = MfaService.takeForUser(session, MfaService.S_REG_REQUEST, u.getKey());
+                    if (stored == null) {
                         json(resp, 400, "{\"error\":\"no registration in progress\"}");
                         return;
                     }
                     boolean hadFactor = mfa.hasFactor(u.getKey());
                     String label = label(req);
-                    pk.finishRegistration(u.getKey(), (String) stored, body(req), label);
+                    pk.finishRegistration(u.getKey(), stored, body(req), label);
                     mfa.passkeyRegistered(u, label);
                     if (!hadFactor) {
-                        MfaService.markVerified(req, u);
+                        mfa.firstFactorAdded(u);
+                        mfa.markVerified(req, u);
                     }
                     if (mfa.remainingRecoveryCodes(u.getKey()) == 0) {
                         List<String> codes = mfa.regenerateRecoveryCodes(u);
-                        req.getSession(true).setAttribute(S_FIRST_FACTOR_CODES, codes);
+                        MfaService.putForUser(req.getSession(true), S_FIRST_FACTOR_CODES, u.getKey(), String.join("\n", codes));
                     }
                     json(resp, 200, "{\"ok\":true}");
                     return;
@@ -98,51 +100,92 @@ public class WebAuthnServlet extends MfaServletSupport {
                         return;
                     }
                     String authRequest = pk.startAssertion(u.getKey());
-                    session.setAttribute(MfaService.S_AUTH_REQUEST, authRequest);
+                    MfaService.putForUser(session, MfaService.S_AUTH_REQUEST, u.getKey(), authRequest);
                     json(resp, 200, PasskeyService.requestJson(authRequest));
                     return;
                 case "/webauthn/authenticate/finish": {
-                    Object stored = session.getAttribute(MfaService.S_AUTH_REQUEST);
-                    session.removeAttribute(MfaService.S_AUTH_REQUEST);
-                    if (!(stored instanceof String) || r != Requirement.VERIFY) {
+                    String stored = MfaService.takeForUser(session, MfaService.S_AUTH_REQUEST, u.getKey());
+                    if (stored == null || r != Requirement.VERIFY) {
                         json(resp, 400, "{\"error\":\"no verification in progress\"}");
                         return;
                     }
-                    if (mfa.lockedUntil(u) != null) {
+                    AttemptLimiter.Admission admission = mfa.beginAttempt(u);
+                    if (admission == AttemptLimiter.Admission.REFUSED) {
                         json(resp, 429, "{\"error\":\"locked\"}");
                         return;
                     }
                     boolean ok;
                     try {
-                        ok = pk.finishAssertion(u.getKey(), (String) stored, body(req));
-                    } catch (IOException | RuntimeException e) {
+                        ok = pk.finishAssertion(u.getKey(), stored, body(req));
+                    } catch (IOException | IllegalArgumentException e) {
+                        // unreadable or malformed assertion: a failed attempt
                         LOG.info("passkey assertion rejected for {}: {}", u.getUsername(), e.toString());
                         ok = false;
+                    } catch (RuntimeException e) {
+                        // A server fault (database, stored data). The attempt beginAttempt counted
+                        // stays counted, so it is audited like a failure; the user gets a 500.
+                        LOG.error("passkey verification of {} failed on the server", u.getUsername(), e);
+                        mfa.attemptFailed(u, admission, "passkey (server error)", req.getRemoteAddr());
+                        json(resp, 500, "{\"error\":\"internal error, try again\"}");
+                        return;
                     }
                     if (!ok) {
-                        MfaService.VerifyOutcome o = mfa.recordFailure(u, "passkey", req.getRemoteAddr());
+                        MfaService.VerifyOutcome o = mfa.attemptFailed(u, admission, "passkey", req.getRemoteAddr());
                         json(resp, o == MfaService.VerifyOutcome.LOCKED ? 429 : 401, "{\"error\":\"passkey not accepted\"}");
                         return;
                     }
                     String target = takeReturnUrl(req);
                     mfa.recordPasskeySuccess(u, req.getRemoteAddr());
-                    MfaService.markVerified(req, u);
+                    mfa.markVerified(req, u);
                     json(resp, 200, "{\"ok\":true,\"redirect\":" + jsonString(target) + "}");
                     return;
                 }
                 default:
-                    LOG.info("unknown WebAuthn endpoint: servletPath={} pathInfo={}", req.getServletPath(), req.getPathInfo());
+                    if (LOG.isInfoEnabled()) {
+                        LOG.info("unknown WebAuthn endpoint: servletPath={} pathInfo={}",
+                                LogText.clean(req.getServletPath()), LogText.clean(req.getPathInfo()));
+                    }
                     json(resp, 404, "{\"error\":\"unknown endpoint\"}");
             }
         } catch (RegistrationFailedException e) {
             LOG.info("passkey registration rejected for {}: {}", u.getUsername(), e.getMessage());
-            json(resp, 400, "{\"error\":\"registration rejected\"}");
+            errorJson(resp, 400, "{\"error\":\"registration rejected\"}");
+        } catch (IOException e) {
+            // unreadable request (malformed JSON, oversized body); mfa.js reads every answer as JSON
+            LOG.info("WebAuthn request of {} not readable: {}", u.getUsername(), e.toString());
+            if (!resp.isCommitted()) {
+                errorJson(resp, 400, "{\"error\":\"request not accepted\"}");
+            }
+        } catch (RuntimeException e) {
+            // A server-side failure. No reset(): it would also drop the Set-Cookie of a session ID
+            // that markVerified has just rotated, logging the user out.
+            LOG.error("WebAuthn request of {} failed", u.getUsername(), e);
+            if (!resp.isCommitted()) {
+                errorJson(resp, 500, "{\"error\":\"internal error, try again\"}");
+            }
+        }
+    }
+
+    /**
+     * Writes an error answer from an exception handler. If even that fails, the
+     * client is gone; there is nobody left to answer, so it is only logged.
+     */
+    private static void errorJson(HttpServletResponse resp, int status, String body) {
+        try {
+            json(resp, status, body);
+        } catch (IOException e) {
+            LOG.debug("could not send the WebAuthn error answer: {}", e.toString());
         }
     }
 
     private static String label(HttpServletRequest req) {
         String raw = req.getHeader("X-MFA-Label");
-        String label = raw == null ? "" : URLDecoder.decode(raw, StandardCharsets.UTF_8).trim();
+        String label;
+        try {
+            label = raw == null ? "" : URLDecoder.decode(raw, StandardCharsets.UTF_8).trim();
+        } catch (IllegalArgumentException e) {
+            label = "";
+        }
         if (label.isEmpty()) {
             label = "Passkey";
         }

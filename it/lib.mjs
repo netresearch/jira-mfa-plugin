@@ -3,6 +3,7 @@ import { chromium } from 'playwright-core';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import http from 'node:http';
 
 export const BASE = process.env.JIRA_BASE_URL || 'http://localhost:18080';
 export const ADMIN_USER = process.env.JIRA_ADMIN_USER || 'admin';
@@ -34,4 +35,27 @@ export function assert(cond, msg) {
 
 export function basicAuth(user, pass) {
   return 'Basic ' + Buffer.from(user + ':' + pass).toString('base64');
+}
+
+// A GET with the path sent byte for byte as given (no URL parsing or
+// normalisation on the client side) and without following redirects.
+export function rawGet(rawPath, headers = {}) {
+  const base = new URL(BASE);
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      host: base.hostname, port: base.port || 80, method: 'GET', path: rawPath, headers,
+    }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text: body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// The Cookie header a browser context would send to BASE.
+export async function cookieHeader(ctx) {
+  return (await ctx.cookies(BASE)).map((c) => c.name + '=' + c.value).join('; ');
 }

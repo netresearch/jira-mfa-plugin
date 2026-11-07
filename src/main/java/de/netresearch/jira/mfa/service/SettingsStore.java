@@ -11,10 +11,14 @@ import javax.inject.Named;
 /** Reads and writes {@link MfaSettings} in Jira's global plugin settings. */
 @Named
 public class SettingsStore {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(SettingsStore.class);
     private static final String NS = "de.netresearch.jira.mfa.";
 
     private final PluginSettingsFactory factory;
     private volatile MfaSettings cached;
+    private volatile long loadedAt;
+    /** Other Data Center nodes see a saved change within this time. */
+    static final long TTL_MILLIS = 30_000L;
 
     @Inject
     public SettingsStore(@ComponentImport PluginSettingsFactory factory) {
@@ -23,11 +27,28 @@ public class SettingsStore {
 
     public MfaSettings get() {
         MfaSettings c = cached;
-        if (c == null) {
-            c = load();
-            cached = c;
+        if (c != null && System.currentTimeMillis() - loadedAt < TTL_MILLIS) {
+            return c;
         }
-        return c;
+        // Reload under the lock save() holds, re-checking after acquiring it, so a
+        // reload that started before a save cannot overwrite the saved settings.
+        synchronized (this) {
+            long now = System.currentTimeMillis();
+            if (cached != null && now - loadedAt < TTL_MILLIS) {
+                return cached;
+            }
+            try {
+                cached = load();
+            } catch (RuntimeException e) {
+                if (cached == null) {
+                    throw e;
+                }
+                // keep the last known settings rather than failing every request
+                LOG.error("cannot reload the MFA settings; keeping the previous ones", e);
+            }
+            loadedAt = now;
+            return cached;
+        }
     }
 
     private MfaSettings load() {
@@ -61,6 +82,7 @@ public class SettingsStore {
         ps.put(NS + "maxFailures", Integer.toString(s.maxFailures));
         ps.put(NS + "lockoutMinutes", Integer.toString(s.lockoutMinutes));
         cached = s;
+        loadedAt = System.currentTimeMillis();
     }
 
     private static String str(PluginSettings ps, String key, String def) {

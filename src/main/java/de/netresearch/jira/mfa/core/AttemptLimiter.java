@@ -18,9 +18,13 @@ public final class AttemptLimiter {
     private final Duration window;
     private final Duration lockout;
     private final Clock clock;
-    private final Map<String, State> states = new ConcurrentHashMap<>();
+    private final Map<String, State> states;
 
     public AttemptLimiter(int maxFailures, Duration window, Duration lockout, Clock clock) {
+        this(maxFailures, window, lockout, clock, new ConcurrentHashMap<>());
+    }
+
+    private AttemptLimiter(int maxFailures, Duration window, Duration lockout, Clock clock, Map<String, State> states) {
         if (maxFailures < 1) {
             throw new IllegalArgumentException("maxFailures must be >= 1");
         }
@@ -28,6 +32,15 @@ public final class AttemptLimiter {
         this.window = window;
         this.lockout = lockout;
         this.clock = clock;
+        this.states = states;
+    }
+
+    /**
+     * A limiter with new limits that keeps the current counts and lockouts, so
+     * changing the settings during an attack does not lift a running lockout.
+     */
+    public AttemptLimiter reconfigured(int maxFailures, Duration window, Duration lockout) {
+        return new AttemptLimiter(maxFailures, window, lockout, clock, states);
     }
 
     private static final class State {
@@ -50,11 +63,29 @@ public final class AttemptLimiter {
         }
     }
 
-    /** Records a failure; returns true when this failure triggered a lockout. */
-    public boolean recordFailure(String key) {
+    /** Outcome of {@link #tryBegin}. */
+    public enum Admission {
+        /** The key is locked; do not check the attempt. */
+        REFUSED,
+        /** The attempt may be checked; it already counts as a failure until {@link #recordSuccess}. */
+        ADMITTED,
+        /** As {@link #ADMITTED}, but this attempt used up the allowance and locked the key. */
+        ADMITTED_LAST
+    }
+
+    /**
+     * Admits one attempt and counts it as a failure up front, in one step under
+     * the key's lock. Counting before the check is what keeps parallel requests
+     * from all passing a "not locked" test before any of their failures is
+     * recorded. A correct attempt clears the count with {@link #recordSuccess}.
+     */
+    public Admission tryBegin(String key) {
         State s = states.computeIfAbsent(key, k -> new State());
         synchronized (s) {
             Instant now = clock.instant();
+            if (s.lockedUntil != null && now.isBefore(s.lockedUntil)) {
+                return Admission.REFUSED;
+            }
             Instant cutoff = now.minus(window);
             while (!s.failures.isEmpty() && !s.failures.peekFirst().isAfter(cutoff)) {
                 s.failures.pollFirst();
@@ -63,17 +94,24 @@ public final class AttemptLimiter {
             if (s.failures.size() >= maxFailures) {
                 s.failures.clear();
                 s.lockedUntil = now.plus(lockout);
-                return true;
+                return Admission.ADMITTED_LAST;
             }
-            return false;
+            return Admission.ADMITTED;
         }
     }
 
+    /** Clears failures and any lockout. The state object is kept, so a parallel {@link #tryBegin} cannot count into a detached one. */
     public void recordSuccess(String key) {
-        states.remove(key);
+        State s = states.get(key);
+        if (s != null) {
+            synchronized (s) {
+                s.failures.clear();
+                s.lockedUntil = null;
+            }
+        }
     }
 
     public void reset(String key) {
-        states.remove(key);
+        recordSuccess(key);
     }
 }

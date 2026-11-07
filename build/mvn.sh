@@ -17,4 +17,4 @@ exec docker run --rm \
   -v "$cache":/var/maven/.m2 \
   -v "$root":/work -w /work \
   "$image" \
-  mvn -Duser.home=/var/maven -s /work/build/maven-settings.xml "$@"
+  mvn -Duser.home=/var/maven "$@"
