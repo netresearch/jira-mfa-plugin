@@ -565,7 +565,25 @@ try {
   r = await pageB.request.get(BASE + '/secure/Dashboard.jspa', { maxRedirects: 0, headers: { Accept: 'text/html' } });
   assert(r.status() === 302 && (r.headers().location || '').includes('/mfa/verify'),
     `the other session is sent to the second step again (HTTP ${r.status()} ${r.headers().location || ''})`);
+  // session C: a fresh password login stopped at the second step, never verified
+  const ctxC = await browser.newContext();
+  const pageC = await ctxC.newPage();
+  await login(pageC, DAVE);
+  assert(pageC.url().includes('/mfa/verify'), 'dave logs in in a third browser and stops at the second step (passkey left)');
   assert(await adminReset(DAVE.name), 'administrator resets dave');
+  {
+    // the first request of session C after the reset, as the browser sends it
+    const res = await pageC.goto(BASE + '/plugins/servlet/mfa/setup');
+    let first = res.request();
+    while (first.redirectedFrom()) first = first.redirectedFrom();
+    const firstRes = await first.response();
+    const loc = (firstRes && firstRes.headers().location) || '';
+    assert(firstRes && firstRes.status() === 302 && new URL(loc, BASE).pathname === '/login.jsp',
+      `after the admin reset the never-verified session's GET of the setup page goes to the login page (HTTP ${firstRes && firstRes.status()} ${loc})`);
+    assert(await pageC.locator('#totp-secret').count() === 0 && await pageC.locator('#login-form-username').count() === 1,
+      `the never-verified session is shown the login form, not the enrolment page (at ${pageC.url()})`);
+    await ctxC.close();
+  }
   // The reset ends every session that existed before it, verified (A) or not (B).
   r = await pageA.request.get(BASE + '/secure/Dashboard.jspa', { maxRedirects: 0, headers: { Accept: 'text/html' } });
   assert(r.status() === 302 && (r.headers().location || '').includes('/login.jsp'),
