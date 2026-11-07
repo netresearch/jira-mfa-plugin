@@ -90,7 +90,7 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 
 ### A user is locked out after failed attempts
 
-Wait for the lockout period (default 15 minutes), or have an administrator reset the user (which also removes the factors), or restart Jira (the counter is in memory).
+Wait for the lockout period (default 15 minutes), or have an administrator reset the user (which also removes the factors), or restart Jira (the counter is in memory). If the user did not make the failed attempts, someone else knows the password: change the password first. A reset without a password change hands the account to whoever enrols first.
 
 ### All administrators are locked out
 
@@ -139,8 +139,8 @@ Licences come from [Atlassian's timebomb licences](https://developer.atlassian.c
 - **Lockout.** Every enforced user who loses the factor and the recovery codes needs an administrator. Keep at least two administrators enrolled with two factors each, and store the recovery-mode password in your secrets manager before rollout.
 - **Basic authentication users.** Scripts, CI jobs and integrations that log in with a password stop working for enforced users at the latest when the grace period ends. Inventory them (Jira access log, `X-AUSERNAME` with Basic) before enabling, switch them to personal access tokens or allow-list the service accounts.
 - **Application links (OAuth 1.0a), Jira mobile app, Service Management portal, Confluence/Bitbucket integrations:** not tested; the test image contains neither Service Management nor linked applications. OAuth-authenticated requests are not exempted, so a Jira macro in Confluence acting as an enforced user may be refused. Customer accounts of the Service Management portal are treated like all other users (the portal's own login page leads to the plugin's verify/setup page); exempt the customer group if they should not need a second factor.
-- **Personal access tokens are not revoked by enrolment or reset.** A token passes without a second step. Whoever had the password while the user had no factor (grace period, or not enforced) could have created one, through the browser or through Basic during the grace period; it keeps working after the user enrols. Revoke a user's tokens after enrolment or reset when the password may have leaked.
+- **Personal access tokens are not revoked by enrolment or reset.** A token passes without a second step. Whoever had the password while the user had no factor (grace period, or not enforced) could have created one, through the browser, or through Basic (during the grace period or while not enforced); it keeps working after the user enrols. Revoke a user's tokens after enrolment or reset when the password may have leaked.
 - **PAT detection is coupled to `pats-plugin` internals** (`access.token.request`, verified in `pats-plugin` 1.4.5 of Jira 9.12.3). If a Jira upgrade changes it, token requests are challenged (fail closed) rather than let through; re-test after upgrades.
-- **Data Center clusters:** the attempt limiter and the settings cache are per node, and another node notices a removed factor or an admin reset up to 30 seconds late (sessions verified there stay valid that long). Fine for a single node.
+- **Data Center clusters:** the attempt limiter is per node, and another node notices saved settings, a removed factor or an admin reset up to 30 seconds late (sessions verified there stay valid that long). Fine for a single node.
 - **Settings take effect with a delay of up to 5 minutes for running sessions of users who needed no second factor**: that result is cached in the session to avoid database reads on every request. New logins see changes immediately.
 - **Concurrent use of one TOTP code:** replay protection is a read-then-write per user, so two requests with the same code in the same instant can both succeed.

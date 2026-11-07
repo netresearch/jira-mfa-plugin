@@ -15,6 +15,9 @@ public class SettingsStore {
 
     private final PluginSettingsFactory factory;
     private volatile MfaSettings cached;
+    private volatile long loadedAt;
+    /** Other Data Center nodes see a saved change within this time. */
+    static final long TTL_MILLIS = 30_000L;
 
     @Inject
     public SettingsStore(@ComponentImport PluginSettingsFactory factory) {
@@ -23,9 +26,11 @@ public class SettingsStore {
 
     public MfaSettings get() {
         MfaSettings c = cached;
-        if (c == null) {
+        long now = System.currentTimeMillis();
+        if (c == null || now - loadedAt >= TTL_MILLIS) {
             c = load();
             cached = c;
+            loadedAt = now;
         }
         return c;
     }
@@ -61,6 +66,7 @@ public class SettingsStore {
         ps.put(NS + "maxFailures", Integer.toString(s.maxFailures));
         ps.put(NS + "lockoutMinutes", Integer.toString(s.lockoutMinutes));
         cached = s;
+        loadedAt = System.currentTimeMillis();
     }
 
     private static String str(PluginSettings ps, String key, String def) {
