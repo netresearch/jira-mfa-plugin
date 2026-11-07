@@ -10,6 +10,7 @@ import de.netresearch.jira.mfa.core.MfaSettings;
 import de.netresearch.jira.mfa.core.RecoveryCodes;
 import de.netresearch.jira.mfa.core.SecretCipher;
 import de.netresearch.jira.mfa.core.Totp;
+import de.netresearch.jira.mfa.core.UserStatus;
 import de.netresearch.jira.mfa.core.VerifiedMark;
 
 import javax.inject.Inject;
@@ -163,6 +164,41 @@ public class MfaService {
                     : graceEndIfStarted(key).map(end -> end.minus(java.time.Duration.ofDays(s.graceDays))).orElse(clock.instant());
         }
         return EnforcementPolicy.evaluate(s, user.getUsername(), groups, hasFactor, first, clock.instant());
+    }
+
+    /** A user with the state the administrators' overview shows. */
+    public static final class Overview {
+        public final ApplicationUser user;
+        public final UserStatus status;
+
+        Overview(ApplicationUser user, UserStatus status) {
+            this.user = user;
+            this.status = status;
+        }
+    }
+
+    /**
+     * The second-factor state of the given users. Reads the stored factors of
+     * all users in three queries; group memberships come from Jira's cache.
+     * Starts no grace period.
+     */
+    public List<Overview> overview(java.util.Collection<ApplicationUser> users) {
+        MfaSettings s = settings.get();
+        Map<String, MfaUser> rows = store.allUsers();
+        Map<String, Integer> passkeyCounts = store.passkeyCounts();
+        Map<String, Integer> codeCounts = store.recoveryCodeCounts();
+        Instant now = clock.instant();
+        List<Overview> out = new ArrayList<>(users.size());
+        for (ApplicationUser u : users) {
+            String key = u.getKey();
+            MfaUser row = rows.get(key);
+            boolean app = row != null && row.getTotpSecret() != null;
+            Instant firstSeen = row != null && row.getFirstSeen() > 0 ? Instant.ofEpochMilli(row.getFirstSeen()) : null;
+            UserStatus st = UserStatus.of(s, u.getUsername(), env.groups(u),
+                    new UserStatus.Factors(app, passkeyCounts.getOrDefault(key, 0), codeCounts.getOrDefault(key, 0)), firstSeen, now);
+            out.add(new Overview(u, st));
+        }
+        return out;
     }
 
     public boolean isEnforced(ApplicationUser user) {

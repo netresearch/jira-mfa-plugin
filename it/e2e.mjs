@@ -189,7 +189,8 @@ try {
   for (const probe of ['/browse/TEST-1', '/secure/attachment/10000/x.txt', '/secure/ViewProfile.jspa',
     '/plugins/servlet/mfa/verify/%2e%2e/%2e%2e/%2e%2e/secure/Dashboard.jspa',
     '/plugins/servlet/mfa/setup/..;/..;/..;/secure/Dashboard.jspa',
-    '/plugins/servlet/mfa/admin']) {
+    '/plugins/servlet/mfa/admin',
+    '/plugins/servlet/mfa/admin/users']) {
     r = await page.request.get(BASE + probe, { maxRedirects: 0, headers: { Accept: 'text/html' } });
     const loc = r.headers().location || '';
     const blocked = (r.status() === 302 && loc.includes('/mfa/verify')) || r.status() === 401 || r.status() === 400;
@@ -204,6 +205,8 @@ try {
   assert(inJira(page), 'correct TOTP code completes the login');
   r = await page.request.get(BASE + '/rest/api/2/myself');
   assert(r.status() === 200, 'verified session can call REST');
+  r = await page.request.get(BASE + '/plugins/servlet/mfa/admin/users', { maxRedirects: 0 });
+  assert(r.status() === 403, `a verified non-administrator cannot open the user overview (HTTP ${r.status()})`);
 
   // PAT for alice, created from her verified session
   // from the page itself, as the profile page's "Create token" button would
@@ -317,6 +320,29 @@ try {
   assert(page.url().includes('/plugins/servlet/mfa/admin'), 'admin reaches the MFA administration page (after websudo)');
   assert(await page.locator('#user-status').getByText('Locked until').count() === 1, 'admin sees the user status');
   await shot(page, 'e2e-07-admin');
+  assert(await page.locator('#users-overview-link').count() === 1, 'the administration page links to the user overview');
+  await page.goto(BASE + '/plugins/servlet/mfa/admin/users');
+  assert(page.url().includes('/plugins/servlet/mfa/admin/users'), 'admin opens the user overview');
+  const aliceRow = page.locator(`#users tr[data-user="${ALICE.name}"]`);
+  assert(await aliceRow.getAttribute('data-state') === 'SET_UP', 'the overview lists alice as set up');
+  assert((await aliceRow.locator('td').nth(2).innerText()).trim() === 'yes', 'the overview shows alice\'s authenticator app');
+  const adminRow = page.locator(`#users tr[data-user="${ADMIN_USER}"]`);
+  assert(await adminRow.getAttribute('data-state') === 'IN_GRACE_PERIOD', 'the overview shows the administrator in the grace period');
+  assert(/^\d{4}-\d{2}-\d{2}$/.test((await adminRow.locator('td').nth(5).innerText()).trim()), 'the overview shows when the grace period ends');
+  assert(Number(await page.locator('#state-counts td[data-state="SET_UP"]').innerText()) >= 1, 'the counts include the set-up users');
+  await shot(page, 'e2e-07b-users');
+  await page.goto(BASE + '/plugins/servlet/mfa/admin/users?state=IN_GRACE_PERIOD');
+  const states = await page.locator('#users tbody tr').evaluateAll((rows) => rows.map((tr) => tr.dataset.state));
+  assert(states.length > 0 && states.every((st) => st === 'IN_GRACE_PERIOD'), 'the state filter shows only that state');
+  assert(await page.locator(`#users tr[data-user="${ALICE.name}"]`).count() === 0, 'the state filter hides alice');
+  r = await page.request.get(BASE + '/plugins/servlet/mfa/admin/users?format=csv');
+  const csv = await r.text();
+  assert(r.status() === 200 && (r.headers()['content-type'] || '').startsWith('text/csv'), `the overview downloads as CSV (HTTP ${r.status()})`);
+  assert(csv.startsWith('username,display_name,email,active,state,') && csv.split('\r\n').some((l) => l.startsWith(ALICE.name + ',') && l.includes(',SET_UP,yes,')),
+    'the CSV has a header and alice\'s row');
+  await page.goto(BASE + '/secure/admin/user/UserBrowser.jspa');
+  assert(await page.locator('#mfa-admin-users-link').count() === 1, 'User management links to the overview');
+  await page.goto(BASE + '/plugins/servlet/mfa/admin?user=' + ALICE.name);
   await Promise.all([page.waitForNavigation(), page.click('#reset-user')]);
   assert((await page.locator('#admin-message').innerText()).includes('were removed'), 'admin resets alice\'s factors');
   await ctx.close();

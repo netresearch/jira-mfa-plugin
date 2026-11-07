@@ -3,6 +3,10 @@ package de.netresearch.jira.mfa.web;
 import com.atlassian.jira.component.ComponentAccessor;
 import com.atlassian.jira.security.xsrf.XsrfTokenGenerator;
 import com.atlassian.jira.user.ApplicationUser;
+import com.atlassian.sal.api.websudo.WebSudoManager;
+import com.atlassian.sal.api.websudo.WebSudoSessionException;
+import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
+import de.netresearch.jira.mfa.core.LogText;
 import de.netresearch.jira.mfa.service.MfaService;
 
 import javax.servlet.http.HttpServlet;
@@ -15,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 
 /** Common helpers for the plugin's servlets. */
 abstract class MfaServletSupport extends HttpServlet {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(MfaServletSupport.class);
     static final String PLUGIN_KEY = "de.netresearch.jira.jira-mfa-plugin";
     static final String SERVLET = "/plugins/servlet/mfa";
 
@@ -22,6 +27,46 @@ abstract class MfaServletSupport extends HttpServlet {
 
     MfaServletSupport(MfaService mfa) {
         this.mfa = mfa;
+    }
+
+    /** Handles a GET; answers 405 unless overridden. */
+    protected void get(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        resp.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+    }
+
+    /** Handles a POST; answers 405 unless overridden. */
+    protected void post(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        resp.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+    }
+
+    @Override
+    protected final void doGet(HttpServletRequest req, HttpServletResponse resp) {
+        handle(req, resp, this::get);
+    }
+
+    @Override
+    protected final void doPost(HttpServletRequest req, HttpServletResponse resp) {
+        handle(req, resp, this::post);
+    }
+
+    @FunctionalInterface
+    interface Handler {
+        void handle(HttpServletRequest req, HttpServletResponse resp) throws IOException;
+    }
+
+    /**
+     * Runs a handler. An IOException here means the answer could not be
+     * written, almost always because the client went away; nothing is left to
+     * answer, so it is logged instead of reaching the container's error page.
+     */
+    static void handle(HttpServletRequest req, HttpServletResponse resp, Handler h) {
+        try {
+            h.handle(req, resp);
+        } catch (IOException e) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("answer to {} {} not completed: {}", req.getMethod(), LogText.clean(req.getRequestURI()), e.toString());
+            }
+        }
     }
 
     ApplicationUser user() {
@@ -34,6 +79,40 @@ abstract class MfaServletSupport extends HttpServlet {
         if (u == null) {
             String here = req.getServletPath() + (req.getPathInfo() == null ? "" : req.getPathInfo());
             resp.sendRedirect(req.getContextPath() + "/login.jsp?os_destination=" + URLEncoder.encode(here, StandardCharsets.UTF_8));
+        }
+        return u;
+    }
+
+    /**
+     * The current user if a system administrator in a verified, secure
+     * administrator session (websudo); otherwise answers the request and
+     * returns null.
+     */
+    ApplicationUser requireAdmin(HttpServletRequest req, HttpServletResponse resp, WebSudoManager webSudo) throws IOException {
+        ApplicationUser u = requireUser(req, resp);
+        if (u == null) {
+            return null;
+        }
+        if (!mfa.env().isSysAdmin(u)) {
+            resp.sendError(HttpServletResponse.SC_FORBIDDEN, "System administrators only.");
+            return null;
+        }
+        // Defence in depth (the filter already requires this): an administrator
+        // who has or must have a factor needs a verified session here.
+        Requirement r = mfa.requirement(u);
+        if ((r == Requirement.VERIFY || r == Requirement.ENROL_REQUIRED) && !mfa.isVerified(req.getSession(false), u)) {
+            resp.sendRedirect(req.getContextPath() + SERVLET + (r == Requirement.VERIFY ? "/verify" : "/setup"));
+            return null;
+        }
+        try {
+            webSudo.willExecuteWebSudoRequest(req);
+        } catch (WebSudoSessionException e) {
+            webSudo.enforceWebSudoProtection(req, resp);
+            return null;
+        }
+        if (!webSudo.canExecuteRequest(req)) {
+            webSudo.enforceWebSudoProtection(req, resp);
+            return null;
         }
         return u;
     }

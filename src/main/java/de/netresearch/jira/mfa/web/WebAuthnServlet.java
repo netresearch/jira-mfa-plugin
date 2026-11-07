@@ -36,7 +36,7 @@ public class WebAuthnServlet extends MfaServletSupport {
     }
 
     @Override
-    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+    protected void post(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         ApplicationUser u = user();
         if (u == null) {
             json(resp, 401, "{\"error\":\"not logged in\"}");

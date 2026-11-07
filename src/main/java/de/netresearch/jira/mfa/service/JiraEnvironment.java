@@ -40,6 +40,11 @@ public class JiraEnvironment {
         return ComponentAccessor.getUserManager().getUserByKey(key);
     }
 
+    /** Every user in every directory, active or not. */
+    public Collection<ApplicationUser> allUsers() {
+        return ComponentAccessor.getUserManager().getAllApplicationUsers();
+    }
+
     public boolean isSysAdmin(ApplicationUser user) {
         return user != null && ComponentAccessor.getGlobalPermissionManager()
                 .hasPermission(GlobalPermissionKey.SYSTEM_ADMIN, user);

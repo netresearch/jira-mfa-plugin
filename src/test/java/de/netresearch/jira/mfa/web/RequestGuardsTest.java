@@ -31,6 +31,21 @@ class RequestGuardsTest {
         assertFalse(MfaFilter.basicPasswordChecked(request(null)), "no login attempt in this request");
     }
 
+    @Test
+    void anUnwritableAnswerIsLoggedButOtherFailuresStillReachJira() {
+        HttpServletRequest req = request(null);
+        boolean[] ran = {false};
+        MfaServletSupport.handle(req, null, (rq, rs) -> {
+            ran[0] = true;
+            throw new java.io.IOException("Broken pipe");
+        });
+        assertTrue(ran[0], "the handler runs");
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () ->
+                MfaServletSupport.handle(req, null, (rq, rs) -> {
+                    throw new IllegalStateException("bug");
+                }), "a programming error is not swallowed");
+    }
+
     private static HttpServletRequest request(String authStatus) {
         return (HttpServletRequest) Proxy.newProxyInstance(RequestGuardsTest.class.getClassLoader(), new Class<?>[]{HttpServletRequest.class},
                 (p, m, a) -> "getAttribute".equals(m.getName()) && MfaFilter.SERAPH_AUTH_STATUS.equals(a[0]) ? authStatus : null);

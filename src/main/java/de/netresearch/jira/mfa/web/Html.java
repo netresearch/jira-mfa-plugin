@@ -56,7 +56,11 @@ public final class Html {
             ".inline{display:inline}.inline button{margin-top:0}",
             ".topbar{background:var(--card);border-bottom:1px solid var(--line)}",
             ".topbar nav{max-width:40rem;margin:0 auto;padding:.6rem 1rem;display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;align-items:center}",
-            ".topbar .home{font-weight:600;margin-right:auto}.topbar .who{color:var(--muted)}");
+            ".topbar .home{font-weight:600;margin-right:auto}.topbar .who{color:var(--muted)}",
+            "main:has(.wide),body:has(.wide) .topbar nav{max-width:72rem}.wide{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:0 1rem 1rem}",
+            "caption{text-align:left;color:var(--muted);padding:.75rem 0}",
+            ".visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}",
+            ".state-enrolment_required{color:var(--err);font-weight:600}.state-set_up{color:var(--ok)}");
 
     public static void page(HttpServletResponse resp, String title, String header, String body, String scriptUrl) throws IOException {
         resp.setContentType("text/html;charset=UTF-8");

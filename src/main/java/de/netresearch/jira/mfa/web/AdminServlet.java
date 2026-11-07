@@ -3,9 +3,6 @@ package de.netresearch.jira.mfa.web;
 import com.atlassian.jira.user.ApplicationUser;
 import com.atlassian.plugin.spring.scanner.annotation.imports.ComponentImport;
 import com.atlassian.sal.api.websudo.WebSudoManager;
-import com.atlassian.sal.api.websudo.WebSudoSessionException;
-import de.netresearch.jira.mfa.core.EnforcementPolicy;
-import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
 import de.netresearch.jira.mfa.core.MfaSettings;
 import de.netresearch.jira.mfa.service.MfaService;
 
@@ -32,38 +29,9 @@ public class AdminServlet extends MfaServletSupport {
         this.webSudo = webSudo;
     }
 
-    private ApplicationUser admin(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-        ApplicationUser u = requireUser(req, resp);
-        if (u == null) {
-            return null;
-        }
-        if (!mfa.env().isSysAdmin(u)) {
-            resp.sendError(HttpServletResponse.SC_FORBIDDEN, "System administrators only.");
-            return null;
-        }
-        // Defence in depth (the filter already requires this): an administrator
-        // who has or must have a factor needs a verified session here.
-        Requirement r = mfa.requirement(u);
-        if ((r == Requirement.VERIFY || r == Requirement.ENROL_REQUIRED) && !mfa.isVerified(req.getSession(false), u)) {
-            resp.sendRedirect(req.getContextPath() + SERVLET + (r == Requirement.VERIFY ? "/verify" : "/setup"));
-            return null;
-        }
-        try {
-            webSudo.willExecuteWebSudoRequest(req);
-        } catch (WebSudoSessionException e) {
-            webSudo.enforceWebSudoProtection(req, resp);
-            return null;
-        }
-        if (!webSudo.canExecuteRequest(req)) {
-            webSudo.enforceWebSudoProtection(req, resp);
-            return null;
-        }
-        return u;
-    }
-
     @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-        ApplicationUser admin = admin(req, resp);
+    protected void get(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        ApplicationUser admin = requireAdmin(req, resp, webSudo);
         if (admin == null) {
             return;
         }
@@ -71,8 +39,8 @@ public class AdminServlet extends MfaServletSupport {
     }
 
     @Override
-    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-        ApplicationUser admin = admin(req, resp);
+    protected void post(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        ApplicationUser admin = requireAdmin(req, resp, webSudo);
         if (admin == null || rejectBadCsrf(req, resp)) {
             return;
         }
@@ -115,7 +83,9 @@ public class AdminServlet extends MfaServletSupport {
     private void render(HttpServletRequest req, HttpServletResponse resp, String error, String message, String lookup) throws IOException {
         MfaSettings s = mfa.settings();
         StringBuilder b = new StringBuilder();
-        b.append("<h1>Two-step verification: administration</h1>");
+        b.append("<h1>Two-step verification: administration</h1>")
+                .append("<p><a id=\"users-overview-link\" href=\"").append(Html.esc(req.getContextPath() + SERVLET + "/admin/users"))
+                .append("\">Overview of all users</a></p>");
         if (error != null) {
             b.append("<p class=\"error\" role=\"alert\">").append(Html.esc(error)).append("</p>");
         }
