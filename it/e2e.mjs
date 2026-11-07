@@ -3,7 +3,7 @@
 // Env: JIRA_BASE_URL, JIRA_ADMIN_USER/PASS, JIRA_ADMIN_PAT (admin token for setup calls),
 //      JIRA_RECOVERY_PASS (recovery_admin password; changes settings and is checked itself).
 import { authenticator } from 'otplib';
-import { launch, shot, assert, basicAuth, BASE, ADMIN_USER, ADMIN_PASS } from './lib.mjs';
+import { launch, shot, assert, basicAuth, rawGet, cookieHeader, BASE, ADMIN_USER, ADMIN_PASS } from './lib.mjs';
 
 authenticator.options = { digits: 6, step: 30, window: 0 };
 const ADMIN_PAT = process.env.JIRA_ADMIN_PAT;
@@ -14,6 +14,9 @@ const RUN = Date.now().toString(36);
 const ALICE = { name: 'alice' + RUN, pass: 'Alice-Pass-' + RUN };
 const BOB = { name: 'bob' + RUN, pass: 'Bob-Pass-' + RUN };
 const CAROL = { name: 'carol' + RUN, pass: 'Carol-Pass-' + RUN };
+const DAVE = { name: 'dave' + RUN, pass: 'Dave-Pass-' + RUN };
+const EVE = { name: 'eve' + RUN, pass: 'Eve-Pass-' + RUN };
+const GINA = { name: 'gina' + RUN, pass: 'Gina-Pass-' + RUN };
 
 async function api(method, path, body, headers = {}) {
   const r = await fetch(BASE + path, {
@@ -55,26 +58,77 @@ async function nextFreshCode(secret) {
   }
 }
 
-// Changes plugin settings through the admin form as recovery_admin, who is
-// never challenged and so is unaffected by a grace period of 0 days.
-async function saveSettings(fields) {
+// Opens the MFA admin page (with an optional query) as recovery_admin, who is
+// never challenged and so is unaffected by a grace period of 0 days, and runs
+// fn on it.
+async function asRecoveryAdmin(query, fn) {
   const c = await browser.newContext();
   const p = await c.newPage();
+  const url = BASE + '/plugins/servlet/mfa/admin' + query;
   try {
     await login(p, { name: 'recovery_admin', pass: RECOVERY_PASS });
-    await p.goto(BASE + '/plugins/servlet/mfa/admin');
+    await p.goto(url);
     if (p.url().includes('WebSudo')) {
       await p.fill('#login-form-authenticatePassword', RECOVERY_PASS);
       await Promise.all([p.waitForNavigation(), p.click('#login-form-submit')]);
-      if (!p.url().includes('/mfa/admin')) await p.goto(BASE + '/plugins/servlet/mfa/admin');
+      if (!p.url().includes('/mfa/admin')) await p.goto(url);
     }
-    for (const [id, value] of Object.entries(fields)) await p.fill('#' + id, value);
-    await Promise.all([p.waitForNavigation(), p.click('#save-settings')]);
-    return (await p.locator('#admin-message').innerText()).includes('Settings saved');
+    return await fn(p);
   } finally {
     await c.close();
   }
 }
+
+// Changes plugin settings through the admin form.
+async function saveSettings(fields) {
+  return asRecoveryAdmin('', async (p) => {
+    for (const [id, value] of Object.entries(fields)) await p.fill('#' + id, value);
+    await Promise.all([p.waitForNavigation(), p.click('#save-settings')]);
+    return (await p.locator('#admin-message').innerText()).includes('Settings saved');
+  });
+}
+
+// The "Grace period ends" cell of the admin status lookup of a user.
+async function graceCell(username) {
+  return asRecoveryAdmin('?user=' + encodeURIComponent(username), async (p) =>
+    (await p.locator('#user-status tr', { hasText: 'Grace period ends' }).locator('td').innerText()).trim());
+}
+
+// Removes all factors of a user through the admin page.
+async function adminReset(username) {
+  return asRecoveryAdmin('?user=' + encodeURIComponent(username), async (p) => {
+    await Promise.all([p.waitForNavigation(), p.click('#reset-user')]);
+    return (await p.locator('#admin-message').innerText()).includes('were removed');
+  });
+}
+
+// Enrols TOTP for a user who has no factor; the page stays on the setup page
+// with a verified session. Returns the secret.
+async function enrolTotp(page, u) {
+  await login(page, u);
+  if (!page.url().includes('/mfa/setup')) await page.goto(BASE + '/plugins/servlet/mfa/setup');
+  const s = (await page.locator('#totp-secret').innerText()).trim();
+  await page.fill('#totp-code', await nextFreshCode(s));
+  await Promise.all([page.waitForNavigation(), page.click('#totp-confirm')]);
+  assert(await page.locator('#recovery-codes code').count() === 10, `${u.name} enrols TOTP`);
+  return s;
+}
+
+// Completes the second step with a fresh TOTP code on the verify page and
+// returns the Location header the code form's POST answered with (null when
+// it did not redirect).
+async function verifyTotp(page, s) {
+  if (!page.url().includes('/mfa/verify')) await page.goto(BASE + '/plugins/servlet/mfa/verify');
+  await page.fill('#code', await nextFreshCode(s));
+  const [nav] = await Promise.all([page.waitForNavigation(), page.click('#verify-submit')]);
+  // walk the redirect chain back to the POST; Jira may redirect the target again
+  let req = nav && nav.request().redirectedFrom();
+  while (req && req.method() !== 'POST') req = req.redirectedFrom();
+  const res = req && await req.response();
+  return res ? res.headers().location || null : null;
+}
+
+const myselfStatus = async (page, headers = {}) => (await page.request.get(BASE + '/rest/api/2/myself', { headers })).status();
 
 // Any Jira page outside the plugin's own pages and the login page.
 function inJira(page) {
@@ -347,6 +401,168 @@ try {
     await ctx.close();
   }
 
+  // ---- 10. Jira's cache prefix /s/<keys>/_/ opens only static resources --------------------
+  await createUser(EVE);
+  const ctxV = await browser.newContext(); // eve, verified
+  const pageV = await ctxV.newPage();
+  const eveSecret = await enrolTotp(pageV, EVE);
+  // [path, Accept]; the control shows Jira serves each behind the prefix
+  const cacheProbes = [['/s/1/_/secure/ViewProfile.jspa', 'text/html'], ['/s/1/_/rest/api/2/myself', 'application/json'],
+    ['/s/1/_/secure/Dashboard.jspa', 'text/html']];
+  for (const [probe, accept] of cacheProbes) {
+    r = await pageV.request.get(BASE + probe, { maxRedirects: 0, headers: { Accept: accept } });
+    const loc = r.headers().location || '';
+    // Jira sends a user who has no dashboard yet to its welcome page
+    const served = probe.includes('Dashboard') ? r.status() === 302 && loc.includes('/secure/WelcomeToJIRA.jspa')
+      : r.status() === 200 && (await r.text()).includes(EVE.name);
+    assert(served, `control: Jira answers ${probe} for a verified session (HTTP ${r.status()} ${loc})`);
+  }
+  let ctxU = await browser.newContext(); // eve, password only
+  let pageU = await ctxU.newPage();
+  await login(pageU, EVE);
+  assert(pageU.url().includes('/mfa/verify'), 'eve is asked for the second step');
+  for (const [probe, accept] of cacheProbes) {
+    r = await pageU.request.get(BASE + probe, { maxRedirects: 0, headers: { Accept: accept } });
+    const loc = r.headers().location || '';
+    const blocked = (r.status() === 302 && loc.includes('/mfa/verify')) || r.status() === 401;
+    assert(blocked && !(await r.text()).includes(EVE.name),
+      `unverified session cannot open ${probe} behind the cache prefix (HTTP ${r.status()} ${loc})`);
+  }
+  {
+    const anon = await browser.newContext();
+    const ap = await anon.newPage();
+    await ap.goto(BASE + '/login.jsp');
+    const urls = await ap.evaluate(() => [...document.querySelectorAll('script[src], link[rel=stylesheet][href]')]
+      .map((e) => e.getAttribute('src') || e.getAttribute('href')));
+    await anon.close();
+    const staticUrl = urls.find((u) => /\/s\/[^?]+\/_\/download\//.test(u));
+    assert(!!staticUrl, `the login page references a static resource behind /s/…/_/download/ (${staticUrl})`);
+    r = await pageU.request.get(new URL(staticUrl, BASE).toString(), { maxRedirects: 0 });
+    const type = r.headers()['content-type'] || '';
+    assert(r.status() === 200 && /javascript|css/.test(type),
+      `unverified session still loads ${staticUrl} (HTTP ${r.status()} ${type})`);
+  }
+
+  // ---- 11. Basic header on top of a session -----------------------------------------------------
+  assert(await saveSettings({ basicAuthAllowedUsers: EVE.name }), 'administrator allow-lists eve for Basic auth');
+  try {
+    const wrongBasic = { Authorization: basicAuth(EVE.name, 'wrong-' + RUN), Accept: 'application/json' };
+    r = await pageU.request.get(BASE + '/rest/api/2/myself', { headers: wrongBasic, maxRedirects: 0 });
+    const h = r.headers();
+    assert(r.status() !== 200 && !(await r.text()).includes(EVE.name),
+      `unverified session + Basic with a wrong password is not served for an allow-listed user (HTTP ${r.status()}, `
+      + `X-AUSERNAME ${h['x-ausername']}, X-Seraph-LoginReason ${h['x-seraph-loginreason']})`);
+    // with the correct password Jira accepts the header, so the plugin decides:
+    // a Basic header on top of a browser session counts as a session request
+    r = await pageU.request.get(BASE + '/rest/api/2/myself', {
+      headers: { Authorization: basicAuth(EVE.name, EVE.pass), Accept: 'application/json' }, maxRedirects: 0,
+    });
+    assert(r.status() === 401 && (await r.text()).includes('Two-step verification required'),
+      `unverified session + Basic with the correct password is treated as the unverified session (HTTP ${r.status()})`);
+    // A verified session passes the filter before the header is looked at, so
+    // this is Jira's own answer to the same request.
+    r = await pageV.request.get(BASE + '/rest/api/2/myself', { headers: wrongBasic, maxRedirects: 0 });
+    console.log(`note - Jira itself, verified session + Basic with a wrong password: HTTP ${r.status()}, `
+      + `X-AUSERNAME ${r.headers()['x-ausername']}, X-Seraph-LoginReason ${r.headers()['x-seraph-loginreason']}`);
+
+    const goodBasic = basicAuth(EVE.name, EVE.pass);
+    const first = await fetch(BASE + '/rest/api/2/myself', {
+      headers: { Authorization: goodBasic, Accept: 'application/json' }, redirect: 'manual',
+    });
+    const firstBody = await first.text();
+    assert(first.status === 200 && firstBody.includes(EVE.name),
+      `Basic without cookies works for an allow-listed enrolled user (HTTP ${first.status})`);
+    const jsession = first.headers.getSetCookie().map((c) => c.split(';')[0]).find((c) => c.startsWith('JSESSIONID='));
+    if (!jsession) {
+      console.log('note - the Basic response set no JSESSIONID; reusing its session was not tested');
+    } else {
+      const second = await fetch(BASE + '/rest/api/2/myself', {
+        headers: { Authorization: goodBasic, Accept: 'application/json', Cookie: jsession }, redirect: 'manual',
+      });
+      const secondBody = await second.text();
+      assert(second.status === 200 && secondBody.includes(EVE.name),
+        `a second Basic request reusing the session the first one created still works (HTTP ${second.status} ${second.status === 200 ? '' : secondBody})`);
+    }
+  } finally {
+    assert(await saveSettings({ basicAuthAllowedUsers: '' }), 'Basic allow-list emptied again');
+  }
+
+  // ---- 12. return target after the second step ------------------------------------------------
+  r = await rawGet('/secure/ViewProfile.jspa', { Cookie: await cookieHeader(ctxU), Accept: 'text/html' });
+  assert(r.status === 302 && (r.headers.location || '').includes('/mfa/verify'),
+    `control: a page request of an unverified session goes to the second step (HTTP ${r.status} ${r.headers.location})`);
+  let target = await verifyTotp(pageU, eveSecret);
+  assert(!!target && new URL(target, BASE).pathname === '/secure/ViewProfile.jspa',
+    `control: after the second step the interrupted page is opened (${target})`);
+  await ctxU.close();
+  ctxU = await browser.newContext();
+  pageU = await ctxU.newPage();
+  await login(pageU, EVE);
+  r = await rawGet('/%09/evil.example', { Cookie: await cookieHeader(ctxU), Accept: 'text/html' });
+  assert(r.status === 302 && (r.headers.location || '').includes('/mfa/verify'),
+    `raw /%09/evil.example from an unverified session reaches the plugin's challenge (HTTP ${r.status} ${r.headers.location})`);
+  target = await verifyTotp(pageU, eveSecret);
+  const t = target ? new URL(target, BASE) : null;
+  // Jira itself sends the dashboard of a user who has none yet on to its
+  // welcome page (see the control in section 10), and rewrites the plugin's
+  // redirect accordingly.
+  assert(!!t && t.host === new URL(BASE).host && !target.includes('evil')
+    && ['/secure/Dashboard.jspa', '/secure/WelcomeToJIRA.jspa'].includes(t.pathname),
+    `after the second step a /%09/evil.example return target leads to the dashboard on Jira (Location ${target})`);
+  assert(pageU.url().startsWith(BASE) && !pageU.url().includes('evil'), `the browser stays on Jira (at ${pageU.url()})`);
+  await ctxU.close();
+  await ctxV.close();
+
+  // ---- 13. removing a factor or an admin reset ends other verified sessions -------------------
+  await createUser(DAVE);
+  const ctxA = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  const cdpA = await ctxA.newCDPSession(pageA);
+  await cdpA.send('WebAuthn.enable');
+  await cdpA.send('WebAuthn.addVirtualAuthenticator', {
+    options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true },
+  });
+  const daveSecret = await enrolTotp(pageA, DAVE);
+  await pageA.goto(BASE + '/plugins/servlet/mfa/setup');
+  await pageA.fill('#passkey-label', 'Second key');
+  await Promise.all([pageA.waitForNavigation(), pageA.click('#passkey-add')]);
+  assert(await pageA.getByText('Second key').count() >= 1, 'dave adds a passkey as second factor');
+  const ctxB = await browser.newContext();
+  const pageB = await ctxB.newPage();
+  await login(pageB, DAVE);
+  assert(pageB.url().includes('/mfa/verify'), 'dave is asked for the second step in a second browser');
+  await verifyTotp(pageB, daveSecret);
+  assert(await myselfStatus(pageA) === 200 && await myselfStatus(pageB) === 200, 'both of dave\'s sessions are verified');
+  await pageA.goto(BASE + '/plugins/servlet/mfa/setup');
+  await Promise.all([pageA.waitForNavigation(), pageA.getByRole('button', { name: 'Remove authenticator app' }).click()]);
+  assert(await pageA.getByText('Authenticator app removed.').count() === 1, 'dave removes the authenticator app in session A');
+  assert(await myselfStatus(pageA) === 200, 'the session that removed the factor stays verified');
+  let s = await myselfStatus(pageB);
+  assert(s === 401, `the other verified session can no longer call REST (HTTP ${s})`);
+  r = await pageB.request.get(BASE + '/secure/Dashboard.jspa', { maxRedirects: 0, headers: { Accept: 'text/html' } });
+  assert(r.status() === 302 && (r.headers().location || '').includes('/mfa/verify'),
+    `the other session is sent to the second step again (HTTP ${r.status()} ${r.headers().location || ''})`);
+  assert(await adminReset(DAVE.name), 'administrator resets dave');
+  r = await pageA.request.get(BASE + '/secure/Dashboard.jspa', { maxRedirects: 0, headers: { Accept: 'text/html' } });
+  assert(r.status() === 302 && (r.headers().location || '').includes('/mfa/setup'),
+    `after the admin reset the remaining verified session is sent to enrolment (HTTP ${r.status()} ${r.headers().location || ''})`);
+  await ctxA.close();
+  await ctxB.close();
+
+  // ---- 14. the admin status lookup does not start a grace period -----------------------------------
+  await createUser(GINA);
+  let cell = await graceCell(GINA.name);
+  assert(cell === 'not started', `status of a user who never logged in: grace period "${cell}"`);
+  cell = await graceCell(GINA.name);
+  assert(cell === 'not started', `a second lookup still shows the grace period "${cell}"`);
+  ctx = await browser.newContext();
+  page = await ctx.newPage();
+  await login(page, GINA);
+  assert(page.url().includes('/mfa/setup') && await page.locator('#later').count() === 1, 'gina\'s first login offers enrolment');
+  await ctx.close();
+  cell = await graceCell(GINA.name);
+  assert(cell !== 'not started' && cell.length > 0, `control: after her first login the grace period has started ("${cell}")`);
+
   // ---- 9. audit log -------------------------------------------------------------------------
   a = await adminApi('GET', '/rest/auditing/1.0/events?limit=200');
   if (a.status === 200) {
@@ -363,7 +579,7 @@ try {
   failed = true;
   console.error(e);
 } finally {
-  for (const u of [ALICE, BOB, CAROL]) {
+  for (const u of [ALICE, BOB, CAROL, DAVE, EVE, GINA]) {
     await adminApi('DELETE', '/rest/api/2/user?username=' + u.name);
   }
   await browser.close();
