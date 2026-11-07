@@ -26,7 +26,8 @@ try {
     await shot(page, 'setup-' + i);
     if (url.includes('SetupMode')) {
       await page.getByText("I'll set it up myself").click();
-      await submitAndLeave('#jira-setupwizard-submit', 'SetupMode');
+      // the mode page has no #jira-setupwizard-submit; its button reads "Next" once a mode is chosen
+      await submitAndLeave('form button[type=submit], form input[type=submit]', 'SetupMode');
     } else if (url.includes('SetupDatabase')) {
       await submitAndLeave('#jira-setup-database-submit', 'SetupDatabase');
     } else if (url.includes('SetupApplicationProperties')) {
@@ -48,7 +49,9 @@ try {
       await page.fill('input[name="username"]', ADMIN_USER);
       await page.fill('input[name="password"]', ADMIN_PASS);
       await page.fill('input[name="confirm"]', ADMIN_PASS);
-      await submitAndLeave('#jira-setupwizard-submit', 'SetupAdminAccount');
+      await page.locator('#jira-setupwizard-submit').click();
+      // the next (mail) step keeps the SetupAdminAccount URL, so wait for its content
+      await page.getByText('Set up email notifications').waitFor({ timeout: 900000 });
     } else if (url.includes('SetupMailNotifications')) {
       await submitAndLeave('#jira-setupwizard-submit', 'SetupMailNotifications');
     } else if (url.includes('/Setup')) {

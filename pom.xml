@@ -15,6 +15,13 @@
     <name>Netresearch DTT GmbH</name>
     <url>https://www.netresearch.de/</url>
   </organization>
+  <licenses>
+    <license>
+      <name>MIT</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
