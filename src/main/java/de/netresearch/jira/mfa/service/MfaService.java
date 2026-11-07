@@ -262,14 +262,48 @@ public class MfaService {
                 && java.security.MessageDigest.isEqual(((String) expected).getBytes(), given.getBytes());
     }
 
+    // ---- user-bound session values ------------------------------------------
+
+    /**
+     * Stores a value for one user. Jira copies all session attributes into the
+     * new session when someone logs in over an existing session in the same
+     * browser, so second-step data must name its user: otherwise the next user
+     * would see, for example, the previous user's pending TOTP secret.
+     */
+    public static void putForUser(HttpSession session, String name, String userKey, String value) {
+        session.setAttribute(name, new String[]{userKey, value});
+    }
+
+    /** The value stored for this user, or null; a value of another user is discarded. */
+    public static String getForUser(HttpSession session, String name, String userKey) {
+        Object v = session.getAttribute(name);
+        if (v instanceof String[]) {
+            String[] pair = (String[]) v;
+            if (pair.length == 2 && pair[0] != null && pair[0].equals(userKey)) {
+                return pair[1];
+            }
+        }
+        if (v != null) {
+            session.removeAttribute(name);
+        }
+        return null;
+    }
+
+    /** As {@link #getForUser}, and removes the value (single use). */
+    public static String takeForUser(HttpSession session, String name, String userKey) {
+        String v = getForUser(session, name, userKey);
+        session.removeAttribute(name);
+        return v;
+    }
+
     // ---- TOTP -------------------------------------------------------------
 
     /** Creates a pending secret for enrolment, kept encrypted in the session until confirmed. */
-    public byte[] pendingTotpSecret(HttpSession session) {
-        Object pending = session.getAttribute(S_PENDING_TOTP);
-        if (pending instanceof String) {
+    public byte[] pendingTotpSecret(HttpSession session, String userKey) {
+        String pending = getForUser(session, S_PENDING_TOTP, userKey);
+        if (pending != null) {
             try {
-                return cipher().decrypt((String) pending);
+                return cipher().decrypt(pending);
             } catch (RuntimeException e) {
                 // encrypted with a key file that has since been replaced: start over with a new secret
                 LOG.warn("discarding a pending TOTP secret that the current key file cannot read", e);
@@ -278,17 +312,17 @@ public class MfaService {
             }
         }
         byte[] secret = totp.newSecret();
-        session.setAttribute(S_PENDING_TOTP, cipher().encrypt(secret));
+        putForUser(session, S_PENDING_TOTP, userKey, cipher().encrypt(secret));
         return secret;
     }
 
     /** Confirms the pending secret with a code from the app; stores it on success. */
     public boolean confirmTotp(ApplicationUser user, HttpSession session, String code) {
-        Object pending = session.getAttribute(S_PENDING_TOTP);
-        if (!(pending instanceof String)) {
+        String pending = getForUser(session, S_PENDING_TOTP, user.getKey());
+        if (pending == null) {
             return false;
         }
-        byte[] secret = cipher().decrypt((String) pending);
+        byte[] secret = cipher().decrypt(pending);
         OptionalLong step = totp.verify(secret, code, clock.instant(), Long.MIN_VALUE);
         if (!step.isPresent()) {
             return false;

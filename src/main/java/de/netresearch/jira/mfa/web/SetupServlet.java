@@ -118,12 +118,9 @@ public class SetupServlet extends MfaServletSupport {
         } else if ("passkey-registered".equals(action)) {
             // the WebAuthn servlet stored the credential; show codes if this was the first factor
             message = "Passkey added.";
-            Object first = session.getAttribute("de.netresearch.jira.mfa.firstFactorCodes");
-            session.removeAttribute("de.netresearch.jira.mfa.firstFactorCodes");
-            if (first instanceof List) {
-                @SuppressWarnings("unchecked")
-                List<String> codes = (List<String>) first;
-                newCodes = codes;
+            String first = MfaService.takeForUser(session, WebAuthnServlet.S_FIRST_FACTOR_CODES, u.getKey());
+            if (first != null && !first.isEmpty()) {
+                newCodes = List.of(first.split("\n"));
             }
         }
         render(req, resp, u, mfa.requirement(u), error, message, newCodes);
@@ -196,7 +193,7 @@ public class SetupServlet extends MfaServletSupport {
         } else {
             byte[] secret;
             try {
-                secret = mfa.pendingTotpSecret(session);
+                secret = mfa.pendingTotpSecret(session, u.getKey());
             } catch (RuntimeException e) {
                 // key file problem: keep passkeys and "later" usable instead of failing the whole page
                 LOG.error("cannot offer TOTP enrolment to {}", u.getUsername(), e);

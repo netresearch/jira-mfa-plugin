@@ -61,7 +61,7 @@ public class WebAuthnServlet extends MfaServletSupport {
                         return;
                     }
                     String regRequest = pk.startRegistration(u.getKey(), u.getUsername(), u.getDisplayName());
-                    session.setAttribute(MfaService.S_REG_REQUEST, regRequest);
+                    MfaService.putForUser(session, MfaService.S_REG_REQUEST, u.getKey(), regRequest);
                     json(resp, 200, PasskeyService.creationJson(regRequest));
                     return;
                 case "/webauthn/register/finish": {
@@ -69,15 +69,14 @@ public class WebAuthnServlet extends MfaServletSupport {
                         json(resp, 403, "{\"error\":\"verify first\"}");
                         return;
                     }
-                    Object stored = session.getAttribute(MfaService.S_REG_REQUEST);
-                    session.removeAttribute(MfaService.S_REG_REQUEST);
-                    if (!(stored instanceof String)) {
+                    String stored = MfaService.takeForUser(session, MfaService.S_REG_REQUEST, u.getKey());
+                    if (stored == null) {
                         json(resp, 400, "{\"error\":\"no registration in progress\"}");
                         return;
                     }
                     boolean hadFactor = mfa.hasFactor(u.getKey());
                     String label = label(req);
-                    pk.finishRegistration(u.getKey(), (String) stored, body(req), label);
+                    pk.finishRegistration(u.getKey(), stored, body(req), label);
                     mfa.passkeyRegistered(u, label);
                     if (!hadFactor) {
                         mfa.firstFactorAdded(u);
@@ -85,7 +84,7 @@ public class WebAuthnServlet extends MfaServletSupport {
                     }
                     if (mfa.remainingRecoveryCodes(u.getKey()) == 0) {
                         List<String> codes = mfa.regenerateRecoveryCodes(u);
-                        req.getSession(true).setAttribute(S_FIRST_FACTOR_CODES, codes);
+                        MfaService.putForUser(req.getSession(true), S_FIRST_FACTOR_CODES, u.getKey(), String.join("\n", codes));
                     }
                     json(resp, 200, "{\"ok\":true}");
                     return;
@@ -100,13 +99,12 @@ public class WebAuthnServlet extends MfaServletSupport {
                         return;
                     }
                     String authRequest = pk.startAssertion(u.getKey());
-                    session.setAttribute(MfaService.S_AUTH_REQUEST, authRequest);
+                    MfaService.putForUser(session, MfaService.S_AUTH_REQUEST, u.getKey(), authRequest);
                     json(resp, 200, PasskeyService.requestJson(authRequest));
                     return;
                 case "/webauthn/authenticate/finish": {
-                    Object stored = session.getAttribute(MfaService.S_AUTH_REQUEST);
-                    session.removeAttribute(MfaService.S_AUTH_REQUEST);
-                    if (!(stored instanceof String) || r != Requirement.VERIFY) {
+                    String stored = MfaService.takeForUser(session, MfaService.S_AUTH_REQUEST, u.getKey());
+                    if (stored == null || r != Requirement.VERIFY) {
                         json(resp, 400, "{\"error\":\"no verification in progress\"}");
                         return;
                     }
@@ -117,7 +115,7 @@ public class WebAuthnServlet extends MfaServletSupport {
                     }
                     boolean ok;
                     try {
-                        ok = pk.finishAssertion(u.getKey(), (String) stored, body(req));
+                        ok = pk.finishAssertion(u.getKey(), stored, body(req));
                     } catch (IOException | IllegalArgumentException e) {
                         // unreadable or malformed assertion: a failed attempt. Other runtime
                         // errors are server faults and reach the outer handler (500, logged as
