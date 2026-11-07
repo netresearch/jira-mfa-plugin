@@ -80,6 +80,7 @@ public class WebAuthnServlet extends MfaServletSupport {
                     pk.finishRegistration(u.getKey(), (String) stored, body(req), label);
                     mfa.passkeyRegistered(u, label);
                     if (!hadFactor) {
+                        mfa.firstFactorAdded(u);
                         mfa.markVerified(req, u);
                     }
                     if (mfa.remainingRecoveryCodes(u.getKey()) == 0) {

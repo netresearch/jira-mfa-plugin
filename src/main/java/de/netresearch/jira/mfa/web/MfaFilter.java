@@ -117,14 +117,12 @@ public class MfaFilter implements Filter {
         HttpSession session = req.getSession(false);
         if (scheme == AuthScheme.BASIC) {
             boolean sameUser = user.getUsername().equalsIgnoreCase(basicUser(req.getHeader("Authorization")));
-            if (sameUser && basicIdentifiesTheUser(req, session, user)) {
-                boolean allowed = BasicAuthRule.allows(mfa.settings(), user.getUsername(), mfa.requirement(user));
-                if (allowed && session != null) {
-                    session.setAttribute(S_BASIC_SESSION, user.getKey());
-                }
-                return allowed ? Decision.PASS : Decision.BASIC_BLOCKED;
+            if (sameUser && basicPasswordChecked(req)) {
+                return BasicAuthRule.allows(mfa.settings(), user.getUsername(), mfa.requirement(user))
+                        ? Decision.PASS : Decision.BASIC_BLOCKED;
             }
-            // a Basic header for someone else, or on top of a browser session: treat as a session request
+            // a Basic header for someone else, or one whose password Seraph did not accept
+            // (the user then comes from a session or remember-me cookie): treat as a session request
         }
         if (mfa.isVerified(session, user)) {
             return Decision.PASS;
@@ -156,35 +154,33 @@ public class MfaFilter implements Filter {
         }
     }
 
-    /** Session attribute: this session was established by a Basic request this filter let through. */
-    static final String S_BASIC_SESSION = "de.netresearch.jira.mfa.basicSession";
-    static final String REMEMBER_ME_COOKIE = "seraph.rememberme.cookie";
+    /** Request attribute Seraph's login filter sets to the result of its login attempt (BaseLoginFilter.OS_AUTHSTATUS_KEY). */
+    static final String SERAPH_AUTH_STATUS = "os_authstatus";
+    static final String SERAPH_LOGIN_SUCCESS = "success";
 
     /**
-     * True when the user of this request can only have come from the Basic
-     * header, so Seraph checked its password. A session or a remember-me cookie
-     * may identify the user before Seraph looks at the header; then the header's
-     * password is not proven and a forged {@code user:anything} must not turn a
-     * session that never passed the second step into a Basic request. Sessions
-     * that a Basic request created (scripts keeping a cookie jar) stay Basic.
+     * True when Seraph checked the Basic header's password in this request and
+     * accepted it. Seraph 4.2 (Jira 9.12) authenticates a Basic header on every
+     * request, also when a session exists, and records the outcome as
+     * {@code os_authstatus}. With a wrong password the request may still carry
+     * the user of a session or remember-me cookie; a forged {@code user:anything}
+     * header must not turn such a session, which may never have passed the
+     * second step, into a Basic request.
      */
-    static boolean basicIdentifiesTheUser(HttpServletRequest req, HttpSession session, ApplicationUser user) {
-        javax.servlet.http.Cookie[] cookies = req.getCookies();
-        if (cookies != null) {
-            for (javax.servlet.http.Cookie c : cookies) {
-                if (REMEMBER_ME_COOKIE.equals(c.getName())) {
-                    return false;
-                }
-            }
-        }
-        return session == null || session.isNew() || user.getKey().equals(session.getAttribute(S_BASIC_SESSION));
+    static boolean basicPasswordChecked(HttpServletRequest req) {
+        return SERAPH_LOGIN_SUCCESS.equals(req.getAttribute(SERAPH_AUTH_STATUS));
     }
 
     static final String S_NONE_UNTIL = "de.netresearch.jira.mfa.noneUntil";
     /** How long a "no second factor needed" result is reused within a session. */
     static final long NONE_CACHE_MILLIS = 5 * 60 * 1000L;
 
-    private static boolean noneCached(HttpSession session, ApplicationUser user) {
+    /**
+     * True while the session's "no second factor needed" result is fresh and
+     * no factor was added since it was cached (a password-only session of an
+     * attacker must not keep passing after the user enrols).
+     */
+    private boolean noneCached(HttpSession session, ApplicationUser user) {
         Object v = session.getAttribute(S_NONE_UNTIL);
         if (!(v instanceof String)) {
             return false;
@@ -195,7 +191,9 @@ public class MfaFilter implements Filter {
             return false;
         }
         try {
-            return System.currentTimeMillis() < Long.parseLong(s.substring(bar + 1));
+            long until = Long.parseLong(s.substring(bar + 1));
+            return System.currentTimeMillis() < until
+                    && !mfa.factorsChangedSince(user.getKey(), until - NONE_CACHE_MILLIS);
         } catch (NumberFormatException e) {
             return false;
         }

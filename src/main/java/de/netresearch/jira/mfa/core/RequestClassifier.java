@@ -81,7 +81,8 @@ public final class RequestClassifier {
             // when that target is itself a static resource, so the result does not
             // depend on the filter seeing the forward.
             int sep = path.indexOf(CACHE_SEPARATOR);
-            if (sep < 0) {
+            if (sep < 0 || sep != path.lastIndexOf(CACHE_SEPARATOR)) {
+                // none, or several: the rewrite may split at either, so do not guess
                 return false;
             }
             path = path.substring(sep + CACHE_SEPARATOR.length() - 1);

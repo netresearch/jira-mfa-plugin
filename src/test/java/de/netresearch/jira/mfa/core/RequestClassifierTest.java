@@ -40,6 +40,8 @@ class RequestClassifierTest {
         assertFalse(RequestClassifier.isOpen("/s/1/_/plugins/servlet/mfa/admin"));
         assertFalse(RequestClassifier.isOpen("/s/1/_/s/2/_/secure/Dashboard.jspa"), "nested prefix");
         assertFalse(RequestClassifier.isOpen("/s/no-separator/download/resources/x.js"));
+        assertFalse(RequestClassifier.isOpen("/s/x/_/download/resources/y/_/secure/Dashboard.jspa"),
+                "a greedy rewrite would split at the last separator");
     }
 
     @Test

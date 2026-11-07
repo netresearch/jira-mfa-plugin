@@ -220,6 +220,22 @@ public class MfaService {
         }
     }
 
+    /**
+     * Records the first factor of a user. Other sessions of the user that were
+     * let through because no second factor was needed must now verify; the
+     * filter compares their "nothing needed" mark with this time.
+     */
+    public void firstFactorAdded(ApplicationUser user) {
+        long now = clock.millis();
+        store.setFactorsChanged(user.getKey(), now, false);
+        factorsChanged.put(user.getKey(), new long[]{now, now});
+    }
+
+    /** True when a factor was added, removed or reset at or after {@code millis}. */
+    public boolean factorsChangedSince(String userKey, long millis) {
+        return factorsChanged(userKey) >= millis;
+    }
+
     public String csrfToken(HttpSession session) {
         Object t = session.getAttribute(S_CSRF);
         if (t instanceof String) {
@@ -374,6 +390,17 @@ public class MfaService {
     // ---- recovery codes ---------------------------------------------------
 
     /** Replaces the user's recovery codes; returns the plain codes to show once. */
+    /**
+     * New recovery codes on the user's request. Other verified sessions of the
+     * user end, because replacing the codes is the remedy for a leaked code and
+     * a session verified with it must not outlive it.
+     */
+    public List<String> replaceRecoveryCodes(ApplicationUser user, HttpServletRequest req) {
+        List<String> codes = regenerateRecoveryCodes(user);
+        endVerifiedSessions(user, req);
+        return codes;
+    }
+
     public List<String> regenerateRecoveryCodes(ApplicationUser user) {
         List<String> codes = recoveryCodes.generate();
         List<String> hashes = new ArrayList<>(codes.size());

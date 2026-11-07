@@ -112,7 +112,7 @@ public class SetupServlet extends MfaServletSupport {
             }
         } else if ("recovery-regenerate".equals(action)) {
             if (hadFactor) {
-                newCodes = mfa.regenerateRecoveryCodes(u);
+                newCodes = mfa.replaceRecoveryCodes(u, req);
                 message = "New recovery codes created. The old ones no longer work.";
             }
         } else if ("passkey-registered".equals(action)) {
@@ -132,6 +132,7 @@ public class SetupServlet extends MfaServletSupport {
     /** After the first factor: the session counts as verified and recovery codes are issued. */
     List<String> afterFirstFactor(HttpServletRequest req, ApplicationUser u, boolean hadFactor) {
         if (!hadFactor) {
+            mfa.firstFactorAdded(u);
             mfa.markVerified(req, u);
         }
         if (mfa.remainingRecoveryCodes(u.getKey()) == 0) {
