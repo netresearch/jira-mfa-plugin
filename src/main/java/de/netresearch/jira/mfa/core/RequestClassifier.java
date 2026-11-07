@@ -7,9 +7,15 @@ import java.util.Locale;
 public final class RequestClassifier {
     public static final String MFA_PREFIX = "/plugins/servlet/mfa/";
 
-    /** Reachable by a logged-in session that has not completed the second step. */
+    /**
+     * Reachable by a logged-in session that has not completed the second step.
+     * The plugin's admin page is deliberately not listed: it must only be
+     * reachable from a verified session.
+     */
     private static final List<String> OPEN_PREFIXES = List.of(
-            MFA_PREFIX,
+            MFA_PREFIX + "verify",
+            MFA_PREFIX + "setup",
+            MFA_PREFIX + "webauthn/",
             "/s/",                       // cached static resources
             "/download/resources/",
             "/download/batch/",
@@ -21,9 +27,6 @@ public final class RequestClassifier {
             "/logout",
             "/secure/Logout",
             "/login.jsp");
-
-    /** Requests that only an already verified session may make while enrolment is mandatory or pending. */
-    private static final List<String> ENROL_OPEN_PREFIXES = List.of(MFA_PREFIX);
 
     private RequestClassifier() {
     }
@@ -40,8 +43,27 @@ public final class RequestClassifier {
         return path.isEmpty() ? "/" : path;
     }
 
+    /**
+     * The path the container dispatches to: servlet path plus path info, which
+     * the container has already decoded and normalised (so {@code /a/%2e%2e/b}
+     * arrives as {@code /b}).
+     */
+    public static String dispatchPath(String servletPath, String pathInfo) {
+        String p = (servletPath == null ? "" : servletPath) + (pathInfo == null ? "" : pathInfo);
+        return p.isEmpty() ? "/" : p;
+    }
+
+    /** True when the raw URI hides dots, slashes or backslashes in percent-encoding. */
+    public static boolean hasEncodedSeparators(String rawUri) {
+        if (rawUri == null) {
+            return false;
+        }
+        String r = rawUri.toLowerCase(Locale.ROOT);
+        return r.contains("%2e") || r.contains("%2f") || r.contains("%5c") || r.contains("%25");
+    }
+
     public static boolean isOpen(String path) {
-        if (path.contains("..")) {
+        if (path.contains("..") || path.contains("\\")) {
             return false;
         }
         for (String p : OPEN_PREFIXES) {
@@ -50,10 +72,6 @@ public final class RequestClassifier {
             }
         }
         return false;
-    }
-
-    public static boolean isEnrolmentPath(String path) {
-        return !path.contains("..") && ENROL_OPEN_PREFIXES.stream().anyMatch(path::startsWith);
     }
 
     /**

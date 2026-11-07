@@ -30,7 +30,7 @@ abstract class MfaServletSupport extends HttpServlet {
     ApplicationUser requireUser(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         ApplicationUser u = user();
         if (u == null) {
-            String here = SERVLET + req.getPathInfo();
+            String here = req.getServletPath() + (req.getPathInfo() == null ? "" : req.getPathInfo());
             resp.sendRedirect(req.getContextPath() + "/login.jsp?os_destination=" + URLEncoder.encode(here, StandardCharsets.UTF_8));
         }
         return u;

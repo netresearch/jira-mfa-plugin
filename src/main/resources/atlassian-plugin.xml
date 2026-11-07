@@ -7,6 +7,8 @@
         <param name="configure.url">/plugins/servlet/mfa/admin</param>
     </plugin-info>
 
+    <resource type="i18n" name="i18n" location="i18n/mfa"/>
+
     <ao key="ao-module" namespace="NRMFA">
         <description>MFA state: users, passkeys, recovery codes</description>
         <entity>de.netresearch.jira.mfa.ao.MfaUser</entity>
@@ -18,6 +20,8 @@
     <servlet-filter key="mfa-filter" class="de.netresearch.jira.mfa.web.MfaFilter" location="before-dispatch" weight="1">
         <url-pattern>/*</url-pattern>
         <dispatcher>REQUEST</dispatcher>
+        <!-- also internal forwards (URL rewriting), so a forward target is checked too -->
+        <dispatcher>FORWARD</dispatcher>
     </servlet-filter>
 
     <servlet key="mfa-verify" class="de.netresearch.jira.mfa.web.VerifyServlet">
@@ -44,6 +48,5 @@
     <web-item key="mfa-admin-link" section="system.admin/security" weight="200">
         <label>Two-step verification</label>
         <link linkId="mfa-admin-link">/plugins/servlet/mfa/admin</link>
-        <condition class="com.atlassian.jira.plugin.webfragment.conditions.UserIsSysAdminCondition"/>
     </web-item>
 </atlassian-plugin>

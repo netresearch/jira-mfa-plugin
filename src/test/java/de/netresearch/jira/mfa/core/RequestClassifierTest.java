@@ -26,6 +26,20 @@ class RequestClassifierTest {
         assertFalse(RequestClassifier.isOpen("/rest/plugins/1.0/safe-mode"));
         assertFalse(RequestClassifier.isOpen("/plugins/servlet/mfa/../../secure/admin"), "no traversal");
         assertFalse(RequestClassifier.isOpen("/plugins/servlet/mfaX"));
+        assertTrue(RequestClassifier.isOpen("/plugins/servlet/mfa/setup"));
+        assertTrue(RequestClassifier.isOpen("/plugins/servlet/mfa/webauthn/authenticate/options"));
+        assertFalse(RequestClassifier.isOpen("/plugins/servlet/mfa/admin"), "admin page needs a verified session");
+    }
+
+    @Test
+    void encodedTraversalIsDetected() {
+        assertTrue(RequestClassifier.hasEncodedSeparators("/plugins/servlet/mfa/verify/%2e%2e/%2E%2E/secure/Dashboard.jspa"));
+        assertTrue(RequestClassifier.hasEncodedSeparators("/plugins/servlet/mfa/verify%2f..%2fx"));
+        assertTrue(RequestClassifier.hasEncodedSeparators("/plugins/servlet/mfa/verify/%252e%252e/x"));
+        assertFalse(RequestClassifier.hasEncodedSeparators("/plugins/servlet/mfa/verify"));
+        assertEquals("/plugins/servlet/mfa/verify", RequestClassifier.dispatchPath("/plugins/servlet", "/mfa/verify"));
+        assertEquals("/secure/Dashboard.jspa", RequestClassifier.dispatchPath("/secure/Dashboard.jspa", null));
+        assertEquals("/", RequestClassifier.dispatchPath("", null));
     }
 
     @Test

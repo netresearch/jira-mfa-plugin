@@ -5,6 +5,7 @@ import com.atlassian.plugin.spring.scanner.annotation.imports.ComponentImport;
 import com.atlassian.sal.api.websudo.WebSudoManager;
 import com.atlassian.sal.api.websudo.WebSudoSessionException;
 import de.netresearch.jira.mfa.core.EnforcementPolicy;
+import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
 import de.netresearch.jira.mfa.core.MfaSettings;
 import de.netresearch.jira.mfa.service.MfaService;
 
@@ -38,6 +39,13 @@ public class AdminServlet extends MfaServletSupport {
         }
         if (!mfa.env().isSysAdmin(u)) {
             resp.sendError(HttpServletResponse.SC_FORBIDDEN, "System administrators only.");
+            return null;
+        }
+        // Defence in depth (the filter already requires this): an administrator
+        // who has or must have a factor needs a verified session here.
+        Requirement r = mfa.requirement(u);
+        if ((r == Requirement.VERIFY || r == Requirement.ENROL_REQUIRED) && !MfaService.isVerified(req.getSession(false), u)) {
+            resp.sendRedirect(req.getContextPath() + SERVLET + (r == Requirement.VERIFY ? "/verify" : "/setup"));
             return null;
         }
         try {

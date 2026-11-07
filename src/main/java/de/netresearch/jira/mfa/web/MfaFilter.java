@@ -109,7 +109,7 @@ public class MfaFilter implements Filter {
         if (mfa.env().isRecoveryAdmin(user) || !mfa.settings().enabled) {
             return Decision.PASS;
         }
-        String path = RequestClassifier.relativePath(req.getRequestURI(), req.getContextPath());
+        String path = RequestClassifier.dispatchPath(req.getServletPath(), req.getPathInfo());
         AuthScheme scheme = RequestClassifier.scheme(req.getHeader("Authorization"));
         HttpSession session = req.getSession(false);
         if (scheme == AuthScheme.BASIC) {
@@ -129,12 +129,19 @@ public class MfaFilter implements Filter {
         if (MfaService.isVerified(session, user)) {
             return Decision.PASS;
         }
-        if (RequestClassifier.isOpen(path)) {
+        if (RequestClassifier.isOpen(path) && !RequestClassifier.hasEncodedSeparators(req.getRequestURI())) {
+            return Decision.PASS;
+        }
+        if (session != null && noneCached(session, user)) {
             return Decision.PASS;
         }
         Requirement r = mfa.requirement(user);
         switch (r) {
             case NONE:
+                if (session != null) {
+                    // users who need nothing would otherwise cost database reads on every request
+                    session.setAttribute(S_NONE_UNTIL, user.getKey() + "|" + (System.currentTimeMillis() + NONE_CACHE_MILLIS));
+                }
                 return Decision.PASS;
             case VERIFY:
                 return Decision.VERIFY;
@@ -149,12 +156,33 @@ public class MfaFilter implements Filter {
         }
     }
 
+    static final String S_NONE_UNTIL = "de.netresearch.jira.mfa.noneUntil";
+    /** How long a "no second factor needed" result is reused within a session. */
+    static final long NONE_CACHE_MILLIS = 5 * 60 * 1000L;
+
+    private static boolean noneCached(HttpSession session, ApplicationUser user) {
+        Object v = session.getAttribute(S_NONE_UNTIL);
+        if (!(v instanceof String)) {
+            return false;
+        }
+        String s = (String) v;
+        int bar = s.lastIndexOf('|');
+        if (bar < 0 || !s.substring(0, bar).equals(user.getKey())) {
+            return false;
+        }
+        try {
+            return System.currentTimeMillis() < Long.parseLong(s.substring(bar + 1));
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     private static boolean isApi(HttpServletRequest req, String path) {
         return RequestClassifier.isApiRequest(path, req.getHeader("Accept"), req.getHeader("X-Requested-With"));
     }
 
     private void challenge(HttpServletRequest req, HttpServletResponse resp, Decision d) throws IOException {
-        String path = RequestClassifier.relativePath(req.getRequestURI(), req.getContextPath());
+        String path = RequestClassifier.dispatchPath(req.getServletPath(), req.getPathInfo());
         if (isApi(req, path) || !"GET".equalsIgnoreCase(req.getMethod())) {
             MfaServletSupport.json(resp, 401, "{\"errorMessages\":[\"Two-step verification required. Complete it in the browser at "
                     + req.getContextPath() + MfaServletSupport.SERVLET + "/verify\"]}");

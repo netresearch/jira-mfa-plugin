@@ -3,6 +3,7 @@ package de.netresearch.jira.mfa.web;
 import com.atlassian.jira.user.ApplicationUser;
 import com.yubico.webauthn.exception.RegistrationFailedException;
 import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
+import de.netresearch.jira.mfa.core.RequestClassifier;
 import de.netresearch.jira.mfa.service.MfaService;
 import de.netresearch.jira.mfa.service.PasskeyService;
 import org.slf4j.Logger;
@@ -43,7 +44,11 @@ public class WebAuthnServlet extends MfaServletSupport {
             json(resp, 403, "{\"error\":\"invalid token\"}");
             return;
         }
-        String path = req.getPathInfo() == null ? "" : req.getPathInfo();
+        // Plugin servlets are dispatched under /plugins/servlet, so the path info
+        // still carries the module's own prefix (/mfa/webauthn/...).
+        String path = RequestClassifier.dispatchPath(req.getServletPath(), req.getPathInfo());
+        int at = path.indexOf("/webauthn/");
+        path = at < 0 ? "" : path.substring(at);
         HttpSession session = req.getSession(true);
         Requirement r = mfa.requirement(u);
         PasskeyService pk = mfa.passkeys();
@@ -126,6 +131,7 @@ public class WebAuthnServlet extends MfaServletSupport {
                     return;
                 }
                 default:
+                    LOG.info("unknown WebAuthn endpoint: servletPath={} pathInfo={}", req.getServletPath(), req.getPathInfo());
                     json(resp, 404, "{\"error\":\"unknown endpoint\"}");
             }
         } catch (RegistrationFailedException e) {
