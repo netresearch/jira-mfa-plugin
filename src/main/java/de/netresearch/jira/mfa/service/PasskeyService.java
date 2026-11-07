@@ -171,16 +171,20 @@ public class PasskeyService {
             if (!result.isSuccess() || !userKey.equals(result.getUsername())) {
                 return false;
             }
-            try {
-                store.updatePasskeyUse(result.getCredential().getCredentialId().getBase64Url(),
-                        result.getSignatureCount(), System.currentTimeMillis());
-            } catch (RuntimeException e) {
-                // the assertion is valid; failing to record its use must not count as a failed attempt
-                LOG.error("cannot record the use of a passkey of {}", userKey, e);
-            }
+            recordUse(userKey, result);
             return true;
         } catch (AssertionFailedException e) {
             return false;
+        }
+    }
+
+    /** The assertion is valid; failing to record its use must not count as a failed attempt. */
+    private void recordUse(String userKey, AssertionResult result) {
+        try {
+            store.updatePasskeyUse(result.getCredential().getCredentialId().getBase64Url(),
+                    result.getSignatureCount(), System.currentTimeMillis());
+        } catch (RuntimeException e) {
+            LOG.error("cannot record the use of a passkey of {}", userKey, e);
         }
     }
 

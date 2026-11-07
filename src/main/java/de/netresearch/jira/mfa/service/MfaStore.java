@@ -17,6 +17,8 @@ import java.util.Optional;
 /** Active Objects persistence for MFA state. */
 @Named
 public class MfaStore {
+    private static final String USER_KEY = "USER_KEY";
+    private static final String BY_USER = USER_KEY + " = ?";
     private final ActiveObjects ao;
 
     @Inject
@@ -25,7 +27,7 @@ public class MfaStore {
     }
 
     public Optional<MfaUser> findUser(String userKey) {
-        MfaUser[] found = ao.find(MfaUser.class, Query.select().where("USER_KEY = ?", userKey));
+        MfaUser[] found = ao.find(MfaUser.class, Query.select().where(BY_USER, userKey));
         return found.length == 0 ? Optional.empty() : Optional.of(found[0]);
     }
 
@@ -52,7 +54,7 @@ public class MfaStore {
         }
         try {
             return ao.executeInTransaction(() -> findUser(userKey).orElseGet(() ->
-                    ao.create(MfaUser.class, new DBParam("USER_KEY", userKey), new DBParam("FIRST_SEEN", 0L))));
+                    ao.create(MfaUser.class, new DBParam(USER_KEY, userKey), new DBParam("FIRST_SEEN", 0L))));
         } catch (RuntimeException e) {
             return findUser(userKey).orElseThrow(() -> e);
         }
@@ -111,7 +113,7 @@ public class MfaStore {
     }
 
     public List<MfaPasskey> passkeys(String userKey) {
-        return Arrays.asList(ao.find(MfaPasskey.class, Query.select().where("USER_KEY = ?", userKey).order("ID")));
+        return Arrays.asList(ao.find(MfaPasskey.class, Query.select().where(BY_USER, userKey).order("ID")));
     }
 
     public Optional<MfaPasskey> passkeyByCredentialId(String credentialId) {
@@ -125,7 +127,7 @@ public class MfaStore {
 
     public void addPasskey(String userKey, String credentialId, String publicKeyCose, long signatureCount, String label, long now) {
         ao.executeInTransaction(() -> ao.create(MfaPasskey.class,
-                new DBParam("USER_KEY", userKey),
+                new DBParam(USER_KEY, userKey),
                 new DBParam("CREDENTIAL_ID", credentialId),
                 new DBParam("PUBLIC_KEY_COSE", publicKeyCose),
                 new DBParam("SIGNATURE_COUNT", signatureCount),
@@ -157,14 +159,14 @@ public class MfaStore {
     }
 
     public List<MfaRecoveryCode> recoveryCodes(String userKey) {
-        return Arrays.asList(ao.find(MfaRecoveryCode.class, Query.select().where("USER_KEY = ?", userKey)));
+        return Arrays.asList(ao.find(MfaRecoveryCode.class, Query.select().where(BY_USER, userKey)));
     }
 
     public void replaceRecoveryCodes(String userKey, List<String> hashes) {
         ao.executeInTransaction(() -> {
-            ao.deleteWithSQL(MfaRecoveryCode.class, "USER_KEY = ?", userKey);
+            ao.deleteWithSQL(MfaRecoveryCode.class, BY_USER, userKey);
             for (String h : hashes) {
-                ao.create(MfaRecoveryCode.class, new DBParam("USER_KEY", userKey), new DBParam("CODE_HASH", h));
+                ao.create(MfaRecoveryCode.class, new DBParam(USER_KEY, userKey), new DBParam("CODE_HASH", h));
             }
             return null;
         });
@@ -178,11 +180,11 @@ public class MfaStore {
     /** Removes every factor and recovery code, clears the grace period and invalidates verified sessions. */
     public void resetUser(String userKey, long now) {
         ao.executeInTransaction(() -> {
-            ao.deleteWithSQL(MfaPasskey.class, "USER_KEY = ?", userKey);
-            ao.deleteWithSQL(MfaRecoveryCode.class, "USER_KEY = ?", userKey);
-            ao.deleteWithSQL(MfaUser.class, "USER_KEY = ?", userKey);
+            ao.deleteWithSQL(MfaPasskey.class, BY_USER, userKey);
+            ao.deleteWithSQL(MfaRecoveryCode.class, BY_USER, userKey);
+            ao.deleteWithSQL(MfaUser.class, BY_USER, userKey);
             // FIRST_SEEN 0: the grace period starts at the user's next request as an enforced user
-            ao.create(MfaUser.class, new DBParam("USER_KEY", userKey), new DBParam("FIRST_SEEN", 0L),
+            ao.create(MfaUser.class, new DBParam(USER_KEY, userKey), new DBParam("FIRST_SEEN", 0L),
                     new DBParam("FACTORS_CHANGED", now), new DBParam("RESET_AT", now));
             return null;
         });

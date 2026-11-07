@@ -440,7 +440,6 @@ public class MfaService {
 
     // ---- recovery codes ---------------------------------------------------
 
-    /** Replaces the user's recovery codes; returns the plain codes to show once. */
     /**
      * New recovery codes on the user's request. Other verified sessions of the
      * user end, because replacing the codes is the remedy for a leaked code and
@@ -452,6 +451,7 @@ public class MfaService {
         return codes;
     }
 
+    /** Replaces the user's recovery codes; returns the plain codes to show once. */
     public List<String> regenerateRecoveryCodes(ApplicationUser user) {
         List<String> codes = recoveryCodes.generate();
         List<String> hashes = new ArrayList<>(codes.size());

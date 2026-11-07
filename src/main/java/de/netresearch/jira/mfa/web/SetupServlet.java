@@ -81,14 +81,15 @@ public class SetupServlet extends MfaServletSupport {
             }
             error = "Setting up a second factor is required now.";
         } else if ("totp-confirm".equals(action)) {
-            Boolean confirmed;
+            boolean confirmed = false;
+            boolean unavailable = false;
             try {
                 confirmed = mfa.confirmTotp(u, session, req.getParameter("code"));
             } catch (RuntimeException e) {
                 LOG.error("cannot store the TOTP secret of {}", u.getUsername(), e);
-                confirmed = null;
+                unavailable = true;
             }
-            if (confirmed == null) {
+            if (unavailable) {
                 error = "Adding an authenticator app is not possible right now. Add a passkey or security key instead, "
                         + "or contact your Jira administrator.";
             } else if (confirmed) {
@@ -202,7 +203,7 @@ public class SetupServlet extends MfaServletSupport {
             if (secret == null) {
                 b.append("<p class=\"error\" role=\"alert\" id=\"totp-unavailable\">Adding an authenticator app is not possible right now. ")
                         .append("Add a passkey or security key instead, or contact your Jira administrator.</p></div>");
-                appendPasskeysAndRest(b, req, resp, u, r, session, hasTotp, passkeys);
+                appendPasskeysAndRest(b, req, resp, u, r, hasTotp, passkeys);
                 return;
             }
             String account = u.getUsername();
@@ -216,11 +217,12 @@ public class SetupServlet extends MfaServletSupport {
                     .append("<button type=\"submit\" id=\"totp-confirm\">Add authenticator app</button></form>");
         }
         b.append("</div>");
-        appendPasskeysAndRest(b, req, resp, u, r, session, hasTotp, passkeys);
+        appendPasskeysAndRest(b, req, resp, u, r, hasTotp, passkeys);
     }
 
     private void appendPasskeysAndRest(StringBuilder b, HttpServletRequest req, HttpServletResponse resp, ApplicationUser u,
-                                       Requirement r, HttpSession session, boolean hasTotp, List<MfaPasskey> passkeys) throws IOException {
+                                       Requirement r, boolean hasTotp, List<MfaPasskey> passkeys) throws IOException {
+        HttpSession session = req.getSession(true);
         String ctx = req.getContextPath();
         String key = u.getKey();
         // Passkeys
