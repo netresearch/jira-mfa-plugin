@@ -149,6 +149,7 @@ try {
   await login(page, ALICE);
   assert(page.url().includes('/plugins/servlet/mfa/setup'), 'after password login a new user lands on the enrolment page');
   assert(await page.getByText('will require a second factor from').count() === 1, 'grace period notice is shown');
+  assert(await page.locator('body > header.topbar #logout').count() === 1, 'the enrolment page has Log out in the bar at the top');
   await shot(page, 'e2e-01-grace');
   await Promise.all([page.waitForURL((u) => !u.toString().includes('/mfa/setup')), page.click('#later')]);
   assert(inJira(page), '"Remind me later" continues to Jira during the grace period (at ' + page.url() + ')');
@@ -165,6 +166,7 @@ try {
   await Promise.all([page.waitForNavigation(), page.click('#totp-confirm')]);
   const codes = await page.locator('#recovery-codes code').allInnerTexts();
   assert(codes.length === 10, 'ten recovery codes are shown after enrolment');
+  assert(await page.locator('body > header.topbar #back-to-jira').count() === 1, 'once verified, the bar at the top links back to Jira');
   await shot(page, 'e2e-02-enrolled');
   await page.goto(BASE + '/secure/Dashboard.jspa');
   assert(inJira(page), 'the enrolling session counts as verified');
@@ -175,6 +177,8 @@ try {
   page = await ctx.newPage();
   await login(page, ALICE);
   assert(page.url().includes('/plugins/servlet/mfa/verify'), 'enrolled user is sent to the second step after the password');
+  assert(await page.locator('body > header.topbar #logout').count() === 1, 'the second step has Log out in the bar at the top');
+  assert(await page.locator('#back-to-jira').count() === 0, 'the second step offers no way back to Jira before it is passed');
   await shot(page, 'e2e-03-verify');
   let r = await page.request.get(BASE + '/rest/api/2/myself');
   assert(r.status() === 401, `unverified session cannot call REST (HTTP ${r.status()})`);
