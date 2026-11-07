@@ -88,11 +88,12 @@ async function saveSettings(fields) {
   });
 }
 
-// The "Grace period ends" cell of the admin status lookup of a user.
-async function graceCell(username) {
+// A cell of the admin status lookup of a user, by its row heading.
+async function statusCell(username, row) {
   return asRecoveryAdmin('?user=' + encodeURIComponent(username), async (p) =>
-    (await p.locator('#user-status tr', { hasText: 'Grace period ends' }).locator('td').innerText()).trim());
+    (await p.locator('#user-status tr', { hasText: row }).locator('td').innerText()).trim());
 }
+const graceCell = (username) => statusCell(username, 'Grace period ends');
 
 // Removes all factors of a user through the admin page.
 async function adminReset(username) {
@@ -444,6 +445,14 @@ try {
   }
 
   // ---- 11. Basic header on top of a session -----------------------------------------------------
+  // Seraph checks a Basic header on every request, also next to a session
+  // cookie, and records the result as os_authstatus; the plugin treats the
+  // request as Basic only when that result is "success".
+  const eveBasic = { Authorization: basicAuth(EVE.name, EVE.pass), Accept: 'application/json' };
+  r = await pageU.request.get(BASE + '/rest/api/2/myself', { headers: eveBasic, maxRedirects: 0 });
+  let body = await r.text();
+  assert(r.status() === 401 && body.includes('Password (Basic) authentication is disabled'),
+    `unverified session + correct Basic password of an enrolled user who is not allow-listed gets the Basic refusal (HTTP ${r.status()})`);
   assert(await saveSettings({ basicAuthAllowedUsers: EVE.name }), 'administrator allow-lists eve for Basic auth');
   try {
     const wrongBasic = { Authorization: basicAuth(EVE.name, 'wrong-' + RUN), Accept: 'application/json' };
@@ -452,18 +461,19 @@ try {
     assert(r.status() !== 200 && !(await r.text()).includes(EVE.name),
       `unverified session + Basic with a wrong password is not served for an allow-listed user (HTTP ${r.status()}, `
       + `X-AUSERNAME ${h['x-ausername']}, X-Seraph-LoginReason ${h['x-seraph-loginreason']})`);
-    // with the correct password Jira accepts the header, so the plugin decides:
-    // a Basic header on top of a browser session counts as a session request
-    r = await pageU.request.get(BASE + '/rest/api/2/myself', {
-      headers: { Authorization: basicAuth(EVE.name, EVE.pass), Accept: 'application/json' }, maxRedirects: 0,
-    });
-    assert(r.status() === 401 && (await r.text()).includes('Two-step verification required'),
-      `unverified session + Basic with the correct password is treated as the unverified session (HTTP ${r.status()})`);
-    // A verified session passes the filter before the header is looked at, so
-    // this is Jira's own answer to the same request.
+    // A verified session passes the filter's session check, so this is Jira's
+    // own answer: the wrong-password case above holds without the plugin.
     r = await pageV.request.get(BASE + '/rest/api/2/myself', { headers: wrongBasic, maxRedirects: 0 });
-    console.log(`note - Jira itself, verified session + Basic with a wrong password: HTTP ${r.status()}, `
-      + `X-AUSERNAME ${r.headers()['x-ausername']}, X-Seraph-LoginReason ${r.headers()['x-seraph-loginreason']}`);
+    assert(r.status() === 401 && r.headers()['x-seraph-loginreason'] === 'AUTHENTICATED_FAILED',
+      `control: Jira itself refuses a wrong Basic password even next to a verified session (HTTP ${r.status()}, `
+      + `X-Seraph-LoginReason ${r.headers()['x-seraph-loginreason']})`);
+    // with the correct password Seraph reports success, so the allow-list decides
+    r = await pageU.request.get(BASE + '/rest/api/2/myself', { headers: eveBasic, maxRedirects: 0 });
+    body = await r.text();
+    assert(r.status() === 200 && body.includes(EVE.name),
+      `unverified session + correct Basic password of an allow-listed enrolled user is served as Basic (HTTP ${r.status()})`);
+    r = await pageU.request.get(BASE + '/rest/api/2/myself', { headers: { Accept: 'application/json' }, maxRedirects: 0 });
+    assert(r.status() === 401, `the accepted Basic request did not verify the browser session (HTTP ${r.status()})`);
 
     const goodBasic = basicAuth(EVE.name, EVE.pass);
     const first = await fetch(BASE + '/rest/api/2/myself', {
@@ -472,17 +482,15 @@ try {
     const firstBody = await first.text();
     assert(first.status === 200 && firstBody.includes(EVE.name),
       `Basic without cookies works for an allow-listed enrolled user (HTTP ${first.status})`);
+    // a script with a cookie jar sends the session the first Basic request created
     const jsession = first.headers.getSetCookie().map((c) => c.split(';')[0]).find((c) => c.startsWith('JSESSIONID='));
-    if (!jsession) {
-      console.log('note - the Basic response set no JSESSIONID; reusing its session was not tested');
-    } else {
-      const second = await fetch(BASE + '/rest/api/2/myself', {
-        headers: { Authorization: goodBasic, Accept: 'application/json', Cookie: jsession }, redirect: 'manual',
-      });
-      const secondBody = await second.text();
-      assert(second.status === 200 && secondBody.includes(EVE.name),
-        `a second Basic request reusing the session the first one created still works (HTTP ${second.status} ${second.status === 200 ? '' : secondBody})`);
-    }
+    assert(!!jsession, 'the cookie-less Basic request sets a JSESSIONID (as a cookie-jar script would keep it)');
+    const second = await fetch(BASE + '/rest/api/2/myself', {
+      headers: { Authorization: goodBasic, Accept: 'application/json', Cookie: jsession }, redirect: 'manual',
+    });
+    const secondBody = await second.text();
+    assert(second.status === 200 && secondBody.includes(EVE.name),
+      `a second Basic request reusing the session the first one created still works (HTTP ${second.status} ${second.status === 200 ? '' : secondBody})`);
   } finally {
     assert(await saveSettings({ basicAuthAllowedUsers: '' }), 'Basic allow-list emptied again');
   }
@@ -523,6 +531,7 @@ try {
     options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true },
   });
   const daveSecret = await enrolTotp(pageA, DAVE);
+  const daveCodes = await pageA.locator('#recovery-codes code').allInnerTexts();
   await pageA.goto(BASE + '/plugins/servlet/mfa/setup');
   await pageA.fill('#passkey-label', 'Second key');
   await Promise.all([pageA.waitForNavigation(), pageA.click('#passkey-add')]);
@@ -533,11 +542,25 @@ try {
   assert(pageB.url().includes('/mfa/verify'), 'dave is asked for the second step in a second browser');
   await verifyTotp(pageB, daveSecret);
   assert(await myselfStatus(pageA) === 200 && await myselfStatus(pageB) === 200, 'both of dave\'s sessions are verified');
+  // new recovery codes end the other verified session as well
+  await pageA.goto(BASE + '/plugins/servlet/mfa/setup');
+  await Promise.all([pageA.waitForNavigation(), pageA.click('#recovery-regenerate')]);
+  const newDaveCodes = await pageA.locator('#recovery-codes code').allInnerTexts();
+  assert(newDaveCodes.length === 10 && !newDaveCodes.some((c) => daveCodes.includes(c)),
+    'dave creates new recovery codes in session A (ten, none of the old ones)');
+  assert(await myselfStatus(pageA) === 200, 'the session that created new recovery codes stays verified');
+  let s = await myselfStatus(pageB);
+  assert(s === 401, `after new recovery codes the other verified session can no longer call REST (HTTP ${s})`);
+  r = await pageB.request.get(BASE + '/secure/Dashboard.jspa', { maxRedirects: 0, headers: { Accept: 'text/html' } });
+  assert(r.status() === 302 && (r.headers().location || '').includes('/mfa/verify'),
+    `after new recovery codes the other session is sent to the second step (HTTP ${r.status()} ${r.headers().location || ''})`);
+  await verifyTotp(pageB, daveSecret);
+  assert(await myselfStatus(pageB) === 200, 'dave verifies session B again');
   await pageA.goto(BASE + '/plugins/servlet/mfa/setup');
   await Promise.all([pageA.waitForNavigation(), pageA.getByRole('button', { name: 'Remove authenticator app' }).click()]);
   assert(await pageA.getByText('Authenticator app removed.').count() === 1, 'dave removes the authenticator app in session A');
   assert(await myselfStatus(pageA) === 200, 'the session that removed the factor stays verified');
-  let s = await myselfStatus(pageB);
+  s = await myselfStatus(pageB);
   assert(s === 401, `the other verified session can no longer call REST (HTTP ${s})`);
   r = await pageB.request.get(BASE + '/secure/Dashboard.jspa', { maxRedirects: 0, headers: { Accept: 'text/html' } });
   assert(r.status() === 302 && (r.headers().location || '').includes('/mfa/verify'),
@@ -562,6 +585,108 @@ try {
   await ctx.close();
   cell = await graceCell(GINA.name);
   assert(cell !== 'not started' && cell.length > 0, `control: after her first login the grace period has started ("${cell}")`);
+
+  // ---- 15. the first factor of a user who is not enforced ends "no factor needed" sessions -------
+  assert(await saveSettings({ enforcedGroups: 'jira-administrators' }), 'administrator limits enforcement to jira-administrators');
+  try {
+    cell = await statusCell(ALICE.name, 'Second factor enforced');
+    assert(cell === 'no', `alice (reset, no factor) is outside the enforced groups ("${cell}")`);
+    const ctxN = await browser.newContext(); // session B: needs no factor
+    const pageN = await ctxN.newPage();
+    await login(pageN, ALICE);
+    assert(inJira(pageN), `a user who is not enforced and has no factor reaches Jira without a second step (at ${pageN.url()})`);
+    // this request caches "no second factor needed" in session B
+    assert(await myselfStatus(pageN) === 200, 'session B of alice can call REST without a factor');
+    const ctxE = await browser.newContext(); // session A: enrols the first factor
+    const pageE = await ctxE.newPage();
+    await enrolTotp(pageE, ALICE);
+    assert(await myselfStatus(pageE) === 200, 'the enrolling session A is verified');
+    r = await pageN.request.get(BASE + '/secure/Dashboard.jspa', { maxRedirects: 0, headers: { Accept: 'text/html' } });
+    assert(r.status() === 302 && (r.headers().location || '').includes('/mfa/verify'),
+      `after the first factor session B is sent to the second step on its next page view (HTTP ${r.status()} ${r.headers().location || ''})`);
+    s = await myselfStatus(pageN);
+    assert(s === 401, `after the first factor session B can no longer call REST (HTTP ${s})`);
+    await ctxN.close();
+    await ctxE.close();
+  } finally {
+    assert(await saveSettings({ enforcedGroups: '' }), 'enforced groups emptied again (all users)');
+  }
+
+  // ---- 16. a lockout survives a change of the attempt settings ------------------------------------
+  ctx = await browser.newContext();
+  page = await ctx.newPage();
+  await login(page, EVE);
+  assert(page.url().includes('/mfa/verify'), 'eve is asked for the second step');
+  // the plugin's form token stays in the session; the locked page has no form
+  const eveCsrf = await page.locator('input[name=csrf]').first().inputValue();
+  for (let i = 0; i < 5; i++) {
+    if (await page.locator('#code').count() === 0) break;
+    await page.fill('#code', '000000');
+    await Promise.all([page.waitForNavigation(), page.click('#verify-submit')]);
+  }
+  assert(await page.getByText('Too many failed attempts').count() === 1, 'five wrong codes lock eve\'s second step');
+  cell = await statusCell(EVE.name, 'Locked until');
+  assert(cell !== '-', `the admin status shows eve locked (until ${cell})`);
+  try {
+    assert(await saveSettings({ lockoutMinutes: '1' }), 'administrator changes the lockout duration to 1 minute');
+    await page.goto(BASE + '/plugins/servlet/mfa/verify');
+    assert(await page.getByText('Too many failed attempts').count() === 1 && await page.locator('#code').count() === 0,
+      'after the settings change the verify page still reports eve locked');
+    r = await page.request.post(BASE + '/plugins/servlet/mfa/verify', {
+      form: { code: await nextFreshCode(eveSecret), csrf: eveCsrf }, maxRedirects: 0, headers: { Accept: 'text/html' },
+    });
+    assert(r.status() === 429, `a correct TOTP code is refused while the lockout lasts (HTTP ${r.status()})`);
+    s = await myselfStatus(page);
+    assert(s === 401, `eve's session is still not verified (HTTP ${s})`);
+    cell = await statusCell(EVE.name, 'Locked until');
+    assert(cell !== '-', `the admin status still shows eve locked (until ${cell})`);
+  } finally {
+    assert(await saveSettings({ lockoutMinutes: '15' }), 'lockout duration restored to 15 minutes');
+  }
+  await ctx.close();
+
+  // ---- 17. user switch in one browser: pending enrolment values belong to their user ---------------
+  ctx = await browser.newContext();
+  page = await ctx.newPage();
+  await login(page, CAROL);
+  assert(page.url().includes('/mfa/setup'), 'carol (no factor) lands on enrolment');
+  const carolKey = (await page.locator('#totp-secret').innerText()).trim();
+  const carolCsrf = await page.locator('input[name=csrf]').first().inputValue();
+  const jsessionOf = async (c) => ((await c.cookies(BASE)).find((k) => k.name === 'JSESSIONID') || {}).value;
+  const carolJsession = await jsessionOf(ctx);
+  await page.goto(BASE + '/login.jsp');
+  const formShown = await page.locator('#login-form-username').count() === 1;
+  console.log(`note - /login.jsp while logged in as carol: ${formShown ? 'the login form is shown' : 'no login form'} (at ${page.url()})`);
+  await shot(page, 'e2e-17-login-over-session');
+  if (formShown) {
+    await page.fill('#login-form-username', GINA.name);
+    await page.fill('#login-form-password', GINA.pass);
+    await Promise.all([page.waitForNavigation(), page.click('#login-form-submit')]);
+  } else {
+    // the same form fields, posted directly
+    r = await page.request.post(BASE + '/login.jsp', { form: { os_username: GINA.name, os_password: GINA.pass, login: 'Log In' } });
+    console.log(`note - login.jsp POST for gina over carol's session: HTTP ${r.status()}`);
+  }
+  r = await page.request.get(BASE + '/rest/api/2/myself');
+  const who = r.status() === 200 ? (await r.json()).name : null;
+  assert(who === GINA.name, `logging in as gina over carol's session in the same browser switches the user (myself: ${who}, HTTP ${r.status()})`);
+  if (!page.url().includes('/mfa/setup')) await page.goto(BASE + '/plugins/servlet/mfa/setup');
+  const ginaKey = (await page.locator('#totp-secret').innerText()).trim();
+  const ginaCsrf = await page.locator('input[name=csrf]').first().inputValue();
+  const ginaJsession = await jsessionOf(ctx);
+  if (ginaCsrf === carolCsrf) {
+    assert(true, `control: the plugin's unbound form token carried over the re-login, so Jira copied the session attributes `
+      + `(JSESSIONID ${ginaJsession !== carolJsession ? 'changed' : 'unchanged'})`);
+  } else {
+    console.log(`note - the plugin's form token did not carry over the re-login (JSESSIONID ${ginaJsession !== carolJsession ? 'changed' : 'unchanged'}); `
+      + 'the key comparison below then does not exercise the user binding');
+  }
+  assert(/^[A-Z2-7]{32}$/.test(ginaKey) && ginaKey !== carolKey, 'gina\'s setup page shows a different manual key than carol\'s');
+  await page.fill('#totp-code', await nextFreshCode(carolKey));
+  await Promise.all([page.waitForNavigation(), page.click('#totp-confirm')]);
+  assert(await page.getByText('That code does not match').count() === 1 && await page.locator('#recovery-codes code').count() === 0,
+    'a code from carol\'s pending key does not enrol gina');
+  await ctx.close();
 
   // ---- 9. audit log -------------------------------------------------------------------------
   a = await adminApi('GET', '/rest/auditing/1.0/events?limit=200');
