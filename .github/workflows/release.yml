@@ -44,7 +44,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '11'
-          cache: maven
+          # no dependency cache: a poisoned cache entry could change the attested jar
       - run: mvn -B package
       - name: Collect the release files
         run: |
