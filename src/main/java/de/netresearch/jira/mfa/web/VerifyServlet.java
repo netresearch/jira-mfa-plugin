@@ -23,7 +23,7 @@ public class VerifyServlet extends MfaServletSupport {
     }
 
     @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+    protected void get(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         ApplicationUser u = requireUser(req, resp);
         if (u == null) {
             return;
@@ -36,7 +36,7 @@ public class VerifyServlet extends MfaServletSupport {
     }
 
     @Override
-    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+    protected void post(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         ApplicationUser u = requireUser(req, resp);
         if (u == null || rejectBadCsrf(req, resp)) {
             return;

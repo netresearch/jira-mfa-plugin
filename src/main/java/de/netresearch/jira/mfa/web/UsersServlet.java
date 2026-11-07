@@ -38,7 +38,7 @@ public class UsersServlet extends MfaServletSupport {
     }
 
     @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+    protected void get(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         ApplicationUser admin = requireAdmin(req, resp, webSudo);
         if (admin == null) {
             return;
