@@ -75,13 +75,11 @@ public final class UserStatus {
         State state;
         // Same order as EnforcementPolicy.evaluate: switched off and exempt
         // users are never asked for their factor, even when they have one.
-        if (!s.enabled) {
-            state = State.NOT_ENFORCED;
-            graceEnd = null;
-        } else if (EnforcementPolicy.isExempt(s, username, groups)) {
+        // isEnforced is false while switched off, so that case ends below.
+        if (s.enabled && EnforcementPolicy.isExempt(s, username, groups)) {
             state = State.EXEMPT;
             graceEnd = null;
-        } else if (hasFactor) {
+        } else if (s.enabled && hasFactor) {
             state = State.SET_UP;
             graceEnd = null;
         } else if (!EnforcementPolicy.isEnforced(s, username, groups)) {
