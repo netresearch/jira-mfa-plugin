@@ -145,20 +145,32 @@ public class WebAuthnServlet extends MfaServletSupport {
             }
         } catch (RegistrationFailedException e) {
             LOG.info("passkey registration rejected for {}: {}", u.getUsername(), e.getMessage());
-            json(resp, 400, "{\"error\":\"registration rejected\"}");
+            errorJson(resp, 400, "{\"error\":\"registration rejected\"}");
         } catch (IOException e) {
             // unreadable request (malformed JSON, oversized body); mfa.js reads every answer as JSON
             LOG.info("WebAuthn request of {} not readable: {}", u.getUsername(), e.toString());
             if (!resp.isCommitted()) {
-                json(resp, 400, "{\"error\":\"request not accepted\"}");
+                errorJson(resp, 400, "{\"error\":\"request not accepted\"}");
             }
         } catch (RuntimeException e) {
             // A server-side failure. No reset(): it would also drop the Set-Cookie of a session ID
             // that markVerified has just rotated, logging the user out.
             LOG.error("WebAuthn request of {} failed", u.getUsername(), e);
             if (!resp.isCommitted()) {
-                json(resp, 500, "{\"error\":\"internal error, try again\"}");
+                errorJson(resp, 500, "{\"error\":\"internal error, try again\"}");
             }
+        }
+    }
+
+    /**
+     * Writes an error answer from an exception handler. If even that fails, the
+     * client is gone; there is nobody left to answer, so it is only logged.
+     */
+    private static void errorJson(HttpServletResponse resp, int status, String body) {
+        try {
+            json(resp, status, body);
+        } catch (IOException e) {
+            LOG.debug("could not send the WebAuthn error answer: {}", e.toString());
         }
     }
 
