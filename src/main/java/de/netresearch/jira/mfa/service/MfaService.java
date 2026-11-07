@@ -488,9 +488,29 @@ public class MfaService {
     public void adminReset(ApplicationUser admin, ApplicationUser target) {
         long now = clock.millis();
         store.resetUser(target.getKey(), now);
+        clearRememberMeTokens(target);
         factorsChanged.remove(target.getKey());
         limiter().reset(target.getKey());
         audit.log(AuditLogger.Action.ADMIN_RESET, target, Map.of("administrator", admin.getUsername()));
+    }
+
+    /**
+     * Removes the user's "remember my login" tokens, as Jira's own admin page
+     * does. A remember-me cookie logs the user in without the password and
+     * creates a session after the reset, so it would outlive the reset.
+     */
+    private void clearRememberMeTokens(ApplicationUser target) {
+        try {
+            com.atlassian.seraph.spi.rememberme.RememberMeTokenDao dao = com.atlassian.jira.component.ComponentAccessor
+                    .getComponent(com.atlassian.seraph.spi.rememberme.RememberMeTokenDao.class);
+            if (dao == null) {
+                LOG.error("remember-me token store not available; clear the tokens of {} in Jira's user administration", target.getUsername());
+                return;
+            }
+            dao.removeAllForUser(target.getUsername());
+        } catch (RuntimeException | LinkageError e) {
+            LOG.error("cannot clear the remember-me tokens of {}; clear them in Jira's user administration", target.getUsername(), e);
+        }
     }
 
     public void basicAuthRejected(ApplicationUser user, String path, String remoteAddr) {

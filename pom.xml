@@ -145,6 +145,19 @@
       <scope>provided</scope>
     </dependency>
     <dependency>
+      <!-- remember-me token store, cleared on an admin reset; Jira 9.12.3 ships 4.2.2 -->
+      <groupId>com.atlassian.seraph</groupId>
+      <artifactId>atlassian-seraph</artifactId>
+      <version>4.2.2</version>
+      <scope>provided</scope>
+      <exclusions>
+        <exclusion>
+          <groupId>*</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
       <groupId>javax.inject</groupId>
       <artifactId>javax.inject</artifactId>
       <version>1</version>

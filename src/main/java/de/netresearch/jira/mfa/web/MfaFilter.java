@@ -101,7 +101,11 @@ public class MfaFilter implements Filter {
             case RELOGIN:
                 HttpSession old = req.getSession(false);
                 if (old != null) {
-                    old.invalidate();
+                    try {
+                        old.invalidate();
+                    } catch (IllegalStateException alreadyInvalidated) {
+                        // a parallel request of the same session ended it first
+                    }
                 }
                 String path = RequestClassifier.dispatchPath(req.getServletPath(), req.getPathInfo());
                 if (isApi(req, path) || !"GET".equalsIgnoreCase(req.getMethod())) {
