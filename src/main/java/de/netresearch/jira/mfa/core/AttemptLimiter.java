@@ -18,9 +18,13 @@ public final class AttemptLimiter {
     private final Duration window;
     private final Duration lockout;
     private final Clock clock;
-    private final Map<String, State> states = new ConcurrentHashMap<>();
+    private final Map<String, State> states;
 
     public AttemptLimiter(int maxFailures, Duration window, Duration lockout, Clock clock) {
+        this(maxFailures, window, lockout, clock, new ConcurrentHashMap<>());
+    }
+
+    private AttemptLimiter(int maxFailures, Duration window, Duration lockout, Clock clock, Map<String, State> states) {
         if (maxFailures < 1) {
             throw new IllegalArgumentException("maxFailures must be >= 1");
         }
@@ -28,6 +32,15 @@ public final class AttemptLimiter {
         this.window = window;
         this.lockout = lockout;
         this.clock = clock;
+        this.states = states;
+    }
+
+    /**
+     * A limiter with new limits that keeps the current counts and lockouts, so
+     * changing the settings during an attack does not lift a running lockout.
+     */
+    public AttemptLimiter reconfigured(int maxFailures, Duration window, Duration lockout) {
+        return new AttemptLimiter(maxFailures, window, lockout, clock, states);
     }
 
     private static final class State {

@@ -119,6 +119,17 @@ class AttemptLimiterTest {
     }
 
     @Test
+    void reconfiguringKeepsRunningLockoutsAndCounts() {
+        for (int i = 0; i < 3; i++) {
+            limiter.tryBegin("u");
+        }
+        limiter.tryBegin("v");
+        AttemptLimiter changed = limiter.reconfigured(2, Duration.ofMinutes(15), Duration.ofMinutes(30));
+        assertEquals(Admission.REFUSED, changed.tryBegin("u"), "the lockout survives a settings change");
+        assertEquals(Admission.ADMITTED_LAST, changed.tryBegin("v"), "v's earlier attempt still counts, against the new limit");
+    }
+
+    @Test
     void rejectsNonsenseConfiguration() {
         assertThrows(IllegalArgumentException.class, () -> new AttemptLimiter(0, Duration.ofMinutes(1), Duration.ofMinutes(1), clock));
     }

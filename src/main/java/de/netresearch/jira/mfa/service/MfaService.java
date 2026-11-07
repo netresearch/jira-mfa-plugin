@@ -55,7 +55,8 @@ public class MfaService {
     private volatile SecretCipher cipher;
     private volatile AttemptLimiter limiter;
     private volatile String limiterConfig = "";
-    private final Map<String, Long> factorsChanged = new ConcurrentHashMap<>();
+    /** user key -> {factors changed, cached at} */
+    private final Map<String, long[]> factorsChanged = new ConcurrentHashMap<>();
 
     @Inject
     public MfaService(MfaStore store, SettingsStore settings, JiraEnvironment env, AuditLogger audit, PasskeyService passkeys) {
@@ -92,9 +93,14 @@ public class MfaService {
         String cfg = s.maxFailures + "/" + s.lockoutMinutes;
         if (limiter == null || !cfg.equals(limiterConfig)) {
             synchronized (this) {
-                if (limiter == null || !cfg.equals(limiterConfig)) {
+                if (limiter == null) {
                     limiter = new AttemptLimiter(s.maxFailures, Duration.ofMinutes(s.lockoutMinutes),
                             Duration.ofMinutes(s.lockoutMinutes), clock);
+                    limiterConfig = cfg;
+                } else if (!cfg.equals(limiterConfig)) {
+                    // keep running lockouts: a settings change must not lift them
+                    limiter = limiter.reconfigured(s.maxFailures, Duration.ofMinutes(s.lockoutMinutes),
+                            Duration.ofMinutes(s.lockoutMinutes));
                     limiterConfig = cfg;
                 }
             }
@@ -179,21 +185,36 @@ public class MfaService {
         req.changeSessionId();
     }
 
-    /** Read on every request of a verified session, so cached; Jira Server is a single node. */
+    /**
+     * Read on every request of a verified session, so cached briefly. The node
+     * that makes the change updates its cache at once; other nodes of a Data
+     * Center cluster see it within {@link #FACTORS_CHANGED_TTL_MILLIS}.
+     */
     private long factorsChanged(String userKey) {
-        return factorsChanged.computeIfAbsent(userKey, store::factorsChanged);
+        long now = clock.millis();
+        long[] cached = factorsChanged.get(userKey);
+        if (cached != null && now - cached[1] < FACTORS_CHANGED_TTL_MILLIS) {
+            return cached[0];
+        }
+        long value = store.factorsChanged(userKey);
+        factorsChanged.put(userKey, new long[]{value, now});
+        return value;
     }
+
+    static final long FACTORS_CHANGED_TTL_MILLIS = 30_000L;
 
     /**
      * Ends every verified session of the user except, when given, the one
      * making the change: a removed or reset factor must not leave a session
-     * that was verified with it.
+     * that was verified with it. When the last factor is gone (only allowed
+     * for users who are not enforced), the grace period is cleared, so it
+     * starts afresh if the user becomes enforced later.
      */
     private void endVerifiedSessions(ApplicationUser user, HttpServletRequest keepVerified) {
         boolean keep = keepVerified != null && isVerified(keepVerified.getSession(false), user);
         long now = clock.millis();
-        store.setFactorsChanged(user.getKey(), now);
-        factorsChanged.put(user.getKey(), now);
+        store.setFactorsChanged(user.getKey(), now, !hasFactor(user.getKey()));
+        factorsChanged.put(user.getKey(), new long[]{now, now});
         if (keep) {
             markVerified(keepVerified, user);
         }
@@ -326,6 +347,8 @@ public class MfaService {
             // and passkeys must still let the user in.
             LOG.error("cannot decrypt the TOTP secret of {}; is {} the key file the secrets were written with?",
                     user.getUsername(), env.keyFile(), e);
+            // read the key file again next time, so restoring the right file takes effect without a restart
+            cipher = null;
             return false;
         }
         OptionalLong step = totp.verify(secret, input, clock.instant(), u.getTotpLastStep());
@@ -387,7 +410,7 @@ public class MfaService {
     public void adminReset(ApplicationUser admin, ApplicationUser target) {
         long now = clock.millis();
         store.resetUser(target.getKey(), now);
-        factorsChanged.put(target.getKey(), now);
+        factorsChanged.put(target.getKey(), new long[]{now, now});
         limiter().reset(target.getKey());
         audit.log(AuditLogger.Action.ADMIN_RESET, target, Map.of("administrator", admin.getUsername()));
     }

@@ -81,14 +81,17 @@ public class SetupServlet extends MfaServletSupport {
             }
             error = "Setting up a second factor is required now.";
         } else if ("totp-confirm".equals(action)) {
-            boolean confirmed;
+            Boolean confirmed;
             try {
                 confirmed = mfa.confirmTotp(u, session, req.getParameter("code"));
             } catch (RuntimeException e) {
                 LOG.error("cannot store the TOTP secret of {}", u.getUsername(), e);
-                confirmed = false;
+                confirmed = null;
             }
-            if (confirmed) {
+            if (confirmed == null) {
+                error = "Adding an authenticator app is not possible right now. Add a passkey or security key instead, "
+                        + "or contact your Jira administrator.";
+            } else if (confirmed) {
                 message = "Authenticator app added.";
                 newCodes = afterFirstFactor(req, u, hadFactor);
             } else {

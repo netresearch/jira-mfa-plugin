@@ -30,7 +30,17 @@ public class MfaStore {
     }
 
     /**
-     * Returns the state row, creating it when missing. A new row has no grace
+     * The state row inside a write transaction. The row is created beforehand by
+     * {@link #getOrCreateUser} in a transaction of its own: a failed insert inside
+     * an enclosing transaction would abort it on PostgreSQL.
+     */
+    private MfaUser existingUser(String userKey) {
+        return findUser(userKey).orElseThrow(() -> new IllegalStateException("no MFA state row for " + userKey));
+    }
+
+    /**
+     * Returns the state row, creating it when missing. Call it outside other
+     * transactions (see {@link #existingUser}). A new row has no grace
      * period yet (first seen = 0); {@link #startGrace} starts it.
      * Parallel first requests of a user race on the unique user key; the loser
      * reads the winner's row instead of failing.
@@ -70,8 +80,9 @@ public class MfaStore {
     }
 
     public void setTotp(String userKey, String encryptedSecret, long lastStep) {
+        getOrCreateUser(userKey);
         ao.executeInTransaction(() -> {
-            MfaUser u = getOrCreateUser(userKey);
+            MfaUser u = existingUser(userKey);
             u.setTotpSecret(encryptedSecret);
             u.setTotpLastStep(lastStep);
             u.save();
@@ -90,8 +101,9 @@ public class MfaStore {
     }
 
     public void setUserHandle(String userKey, String handle) {
+        getOrCreateUser(userKey);
         ao.executeInTransaction(() -> {
-            MfaUser u = getOrCreateUser(userKey);
+            MfaUser u = existingUser(userKey);
             u.setUserHandle(handle);
             u.save();
             return null;
@@ -179,10 +191,15 @@ public class MfaStore {
         return findUser(userKey).map(MfaUser::getFactorsChanged).orElse(0L);
     }
 
-    public void setFactorsChanged(String userKey, long now) {
+    /** Records a factor removal; {@code clearGrace} resets the grace period to "not started". */
+    public void setFactorsChanged(String userKey, long now, boolean clearGrace) {
+        getOrCreateUser(userKey);
         ao.executeInTransaction(() -> {
-            MfaUser u = getOrCreateUser(userKey);
+            MfaUser u = existingUser(userKey);
             u.setFactorsChanged(now);
+            if (clearGrace) {
+                u.setFirstSeen(0L);
+            }
             u.save();
             return null;
         });

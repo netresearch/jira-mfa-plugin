@@ -42,6 +42,7 @@ import java.util.stream.Collectors;
  */
 @Named
 public class PasskeyService {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(PasskeyService.class);
     private final MfaStore store;
     private final SettingsStore settings;
     private final JiraEnvironment env;
@@ -170,8 +171,13 @@ public class PasskeyService {
             if (!result.isSuccess() || !userKey.equals(result.getUsername())) {
                 return false;
             }
-            store.updatePasskeyUse(result.getCredential().getCredentialId().getBase64Url(),
-                    result.getSignatureCount(), System.currentTimeMillis());
+            try {
+                store.updatePasskeyUse(result.getCredential().getCredentialId().getBase64Url(),
+                        result.getSignatureCount(), System.currentTimeMillis());
+            } catch (RuntimeException e) {
+                // the assertion is valid; failing to record its use must not count as a failed attempt
+                LOG.error("cannot record the use of a passkey of {}", userKey, e);
+            }
             return true;
         } catch (AssertionFailedException e) {
             return false;

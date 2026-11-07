@@ -139,12 +139,18 @@ public class WebAuthnServlet extends MfaServletSupport {
         } catch (RegistrationFailedException e) {
             LOG.info("passkey registration rejected for {}: {}", u.getUsername(), e.getMessage());
             json(resp, 400, "{\"error\":\"registration rejected\"}");
-        } catch (IOException | RuntimeException e) {
-            // mfa.js reads every answer as JSON; the container's HTML error page would show as a parse error
-            LOG.warn("WebAuthn request of {} failed", u.getUsername(), e);
+        } catch (IOException e) {
+            // unreadable request (malformed JSON, oversized body); mfa.js reads every answer as JSON
+            LOG.info("WebAuthn request of {} not readable: {}", u.getUsername(), e.toString());
             if (!resp.isCommitted()) {
-                resp.reset();
                 json(resp, 400, "{\"error\":\"request not accepted\"}");
+            }
+        } catch (RuntimeException e) {
+            // A server-side failure. No reset(): it would also drop the Set-Cookie of a session ID
+            // that markVerified has just rotated, logging the user out.
+            LOG.error("WebAuthn request of {} failed", u.getUsername(), e);
+            if (!resp.isCommitted()) {
+                json(resp, 500, "{\"error\":\"internal error, try again\"}");
             }
         }
     }
