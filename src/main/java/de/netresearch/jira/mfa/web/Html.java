@@ -53,9 +53,12 @@ public final class Html {
             "code{font-family:ui-monospace,monospace;word-break:break-all}",
             ".qr{background:#fff;padding:8px;display:inline-block;border-radius:4px}",
             "table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.4rem;border-bottom:1px solid var(--line)}",
-            ".inline{display:inline}.inline button{margin-top:0}");
+            ".inline{display:inline}.inline button{margin-top:0}",
+            ".topbar{background:var(--card);border-bottom:1px solid var(--line)}",
+            ".topbar nav{max-width:40rem;margin:0 auto;padding:.6rem 1rem;display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;align-items:center}",
+            ".topbar .home{font-weight:600;margin-right:auto}.topbar .who{color:var(--muted)}");
 
-    public static void page(HttpServletResponse resp, String title, String body, String scriptUrl) throws IOException {
+    public static void page(HttpServletResponse resp, String title, String header, String body, String scriptUrl) throws IOException {
         resp.setContentType("text/html;charset=UTF-8");
         resp.setHeader("Cache-Control", "no-store");
         resp.setHeader("X-Frame-Options", "DENY");
@@ -64,7 +67,8 @@ public final class Html {
         b.append("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">")
                 .append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
                 .append("<meta name=\"decorator\" content=\"none\">")
-                .append("<title>").append(esc(title)).append("</title><style>").append(CSS).append("</style></head><body><main>")
+                .append("<title>").append(esc(title)).append("</title><style>").append(CSS).append("</style></head><body>")
+                .append(header == null ? "" : header).append("<main>")
                 .append(body).append("</main>");
         if (scriptUrl != null) {
             b.append("<script src=\"").append(esc(scriptUrl)).append("\"></script>");

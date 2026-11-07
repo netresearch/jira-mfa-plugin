@@ -170,7 +170,7 @@ public class AdminServlet extends MfaServletSupport {
                 .append(field("maxFailures", "Failed attempts before lockout", Integer.toString(s.maxFailures), "number"))
                 .append(field("lockoutMinutes", "Lockout duration (minutes)", Integer.toString(s.lockoutMinutes), "number"))
                 .append("<button type=\"submit\" id=\"save-settings\">Save settings</button></form></div>");
-        Html.page(resp, "Two-step verification administration", b.toString(), null);
+        Html.page(resp, "Two-step verification administration", header(req, user(), true), b.toString(), null);
     }
 
     private static String row(String k, String v) {
