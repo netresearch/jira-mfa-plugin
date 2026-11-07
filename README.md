@@ -69,7 +69,7 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 | Active | on | Off = no checks at all. |
 | Groups that must use a second factor | empty = all users | One group per line. Users outside these groups are not forced, but once they enrol they are always challenged. |
 | Exempt groups / exempt users | empty | Never challenged, even with a factor. Use for emergencies, not as a standing policy. |
-| Grace period | 14 days | Counted from the first request at which the user is enforced and has no factor Users who become enforced later, for example when the group list is widened, get the full period from then. A grace period that has started is not restarted by leaving and re-entering an enforced group; removing one's last factor (possible only while not enforced) or an admin reset clears it, and it starts again at the next request as an enforced user. 0 = enrol at the next login. |
+| Grace period | 14 days | Counted from the first request at which the user is enforced and has no factor. Users who become enforced later, for example when the group list is widened, get the full period from then. A grace period that has started is not restarted by leaving and re-entering an enforced group; removing one's last factor (possible only while not enforced) or an admin reset clears it, and it starts again at the next request as an enforced user. 0 = enrol at the next login. |
 | HTTP Basic authentication | Block | Block for users who have a factor or whose grace period has expired. |
 | Users still allowed to use Basic | empty | Service accounts and scripts that cannot use a token yet. `*` allows everyone. |
 | Passkey relying party ID | empty = base URL host | Changing it invalidates every registered passkey. |

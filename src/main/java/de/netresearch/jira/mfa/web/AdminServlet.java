@@ -106,7 +106,7 @@ public class AdminServlet extends MfaServletSupport {
             } else {
                 mfa.adminReset(admin, target);
                 message = "All second factors and recovery codes of " + target.getUsername()
-                        + " were removed. The grace period starts again now.";
+                        + " were removed. The grace period starts again at the user's next request.";
             }
         }
         render(req, resp, error, message, lookup);
