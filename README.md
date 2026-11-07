@@ -15,7 +15,7 @@ Built for and tested against Jira Software 9.12.3 on Java 17 (compiled for Java 
 | Part | Implementation |
 |---|---|
 | Enforcement | Servlet filter module at `before-dispatch` on `/*`. At that point Seraph and the token filters have identified the user, so the plugin needs no change to Jira's `seraph-config.xml` (a custom Seraph authenticator would). |
-| Session state | A verified session carries the user key in a session attribute; the session ID is rotated on verification. A new session (including one created by the "remember me" cookie) must verify again. |
+| Session state | A verified session carries the user key in a session attribute; the session ID is rotated on verification. A new session, including one created by the "remember me" cookie, must verify again (tested: a request with only the remember-me cookie is sent to the plugin's page). |
 | TOTP | Codes from [java-otp](https://github.com/jchambers/java-otp); one step of clock drift either way; a code from an already used step is rejected (replay). |
 | Passkeys | [Yubico java-webauthn-server](https://github.com/Yubico/java-webauthn-server) does all parsing and signature checks. Relying party ID = host of the Jira base URL (configurable), origin = base URL. ES256 and RS256. Non-discoverable credentials, user verification preferred. |
 | Storage | Active Objects tables `AO_..._USER_STATE`, `..._PASSKEY`, `..._RECOVERY_CODE` (namespace `NRMFA`). TOTP secrets are AES-256-GCM encrypted. |
@@ -93,9 +93,10 @@ Use Jira's recovery mode, which the plugin honours:
 
 ### Disable the plugin without logging in
 
-- **Disable at startup:** start Jira with `-Datlassian.plugins.startup.options="--disable-addons=de.netresearch.jira.jira-mfa-plugin"`. The app stays installed but disabled for that run. `--disable-all-addons` starts Jira in safe mode with all user-installed apps disabled.
-- **Safe mode** (*Manage apps > Enter safe mode*) disables every user-installed app, this one included. It needs an administrator session, so use recovery mode first if no administrator can log in.
-- **Remove the jar:** stop Jira, delete `$JIRA_HOME/plugins/installed-plugins/*jira-mfa-plugin*.jar`, start Jira. The Active Objects tables and the key file stay; reinstalling the same version restores the previous state.
+- **Remove the jar (tested):** stop Jira, delete `$JIRA_HOME/plugins/installed-plugins/plugin_<number>_jira-mfa-plugin-<version>.jar`, start Jira. In the test the plugin was gone afterwards and password logins worked without a second step. The Active Objects tables and `$JIRA_HOME/data/mfa/secret.key` stay; reinstalling restores the previous state.
+- **Recovery mode (tested):** see above; `recovery_admin` can disable the app in *Manage apps* or uncheck *Active* on the MFA admin page.
+- **Safe mode** (*Manage apps > Enter safe mode*) disables every user-installed app, this one included. It needs an administrator session, so use recovery mode first if no administrator can log in. Not tested.
+- **Disable at startup (Server licence only):** `-Datlassian.plugins.startup.options="--disable-addons=de.netresearch.jira.jira-mfa-plugin"` ([Atlassian: Start and stop Jira applications](https://confluence.atlassian.com/adminjiraserver0900/start-and-stop-jira-applications-1142255793.html)). Atlassian states that it "does not work for Jira Data Center applications", and on the Data-Center-licensed test instance the plugin indeed stayed enabled. Untested with a Server licence; prefer removing the jar.
 
 Disabling the plugin removes the second factor for everybody. Basic authentication is then accepted again.
 
@@ -114,14 +115,17 @@ docker run -d --name jira-mfa-jira --network jira-mfa-net -p 127.0.0.1:18080:808
 cd it && npm ci
 node setup-jira.mjs <file with a timebomb licence>   # setup wizard
 ./install-plugin.sh ../target/jira-mfa-plugin-*.jar
-JIRA_ADMIN_PAT=<admin token> node e2e.mjs
+JIRA_ADMIN_PAT=<admin token> JIRA_RECOVERY_PASS=<secret> node e2e.mjs
 ```
 
-The licence is the "10 user Jira Software Data Center license, expires in 3 hours" from [Atlassian's timebomb licences](https://developer.atlassian.com/platform/marketplace/timebomb-licenses-for-testing-server-apps/). `e2e.mjs` covers: grace-period offer and postponement, TOTP enrolment with QR code and manual key, recovery codes issued, second step after the next login, wrong code, replayed code, REST blocked for an unverified session (also with a garbage Bearer header), personal access token accepted, Basic authentication refused, recovery code use and single use, lockout after five failures, admin reset behind websudo, an enrolled administrator unable to reach the MFA admin page or UPM before the second step, passkey registration and login with a Chromium virtual authenticator (CDP `WebAuthn.addVirtualAuthenticator`), rejection of an unknown authenticator, and the audit log entries.
+Not covered by the automated tests: removing factors (including the last-factor rule), creating new recovery codes, saving settings through the admin form, group enforcement and exemptions, the Basic allow-list, OAuth/application links, Service Management, the mobile app, a Server-licensed instance and a Java 11 runtime.
+
+The licence is the "10 user Jira Software Data Center license, expires in 3 hours" from [Atlassian's timebomb licences](https://developer.atlassian.com/platform/marketplace/timebomb-licenses-for-testing-server-apps/). `e2e.mjs` covers: grace-period offer and postponement, TOTP enrolment with QR code and manual key, recovery codes issued, second step after the next login, wrong code, replayed code, REST blocked for an unverified session (also with a garbage Bearer header), personal access token accepted, Basic authentication refused, recovery code use and single use, lockout after five failures, admin reset behind websudo, an enrolled administrator unable to reach the MFA admin page or UPM before the second step, passkey registration and login with a Chromium virtual authenticator (CDP `WebAuthn.addVirtualAuthenticator`), rejection of an unknown authenticator, "Log out" from the verify page, `recovery_admin` reaching Jira without a second step, blocked deep links and path tricks (`/browse/…`, attachments, `%2e%2e` and `..;` traversal behind an open prefix), and the audit log entries.
 
 ## Open risks for a production rollout
 
 - **Licence type.** `/rest/api/2/serverInfo` reports `deploymentType: Server` even with a Data Center licence (measured on the test instance). Check *Versions & licenses* on the production instance: with a Data Center licence, Jira's own *Authentication methods* page can block Basic authentication too ([Atlassian: allowlist when basic authentication is disabled](https://confluence.atlassian.com/enterprise/creating-an-allowlist-when-basic-authentication-is-disabled-1044106574.html)); with a Server licence that page does not exist and this plugin's Basic block is the only one.
+- **Basic authentication stops at installation, not at the end of the grace period.** The block applies to every user who has or needs a second factor, and with the default "all users" enforcement that is everybody from the first request on. Install the plugin and set groups and the Basic allow-list in one sitting, or decide whether Basic should stay allowed during the grace period (not implemented). Every refused Basic request writes an audit event; a misconfigured script polling Jira fills the audit log (the test's own install script produced 62 events in two minutes).
 - **Lockout.** Every enforced user who loses the factor and the recovery codes needs an administrator. Keep at least two administrators enrolled with two factors each, and document the recovery-mode password in the vault before rollout.
 - **Basic authentication users.** Scripts, CI jobs and integrations that log in with a password stop working for enforced users. Inventory them (Jira access log, `X-AUSERNAME` with Basic) before enabling, switch them to personal access tokens or allow-list the service accounts.
 - **Application links (OAuth 1.0a), Jira mobile app, Service Management portal, Confluence/Bitbucket integrations:** not tested; the test image contains neither Service Management nor linked applications. OAuth-authenticated requests are not exempted, so a Jira macro in Confluence acting as an enforced user may be refused. Customer accounts of the Service Management portal are treated like all other users (the portal's own login page leads to the plugin's verify/setup page); exempt the customer group if they should not need a second factor.

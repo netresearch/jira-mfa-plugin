@@ -135,6 +135,18 @@ try {
   const alicePat = JSON.parse(pat.body).rawToken;
   await ctx.close();
 
+  // the verify page's "Log out" link ends the password-only session
+  ctx = await browser.newContext();
+  page = await ctx.newPage();
+  await login(page, ALICE);
+  assert(page.url().includes('/mfa/verify'), 'second step shown again');
+  await Promise.all([page.waitForNavigation(), page.click('#logout')]);
+  await page.waitForLoadState('load');
+  r = await page.request.get(BASE + '/rest/api/2/myself');
+  assert(r.status() === 401 && !(await r.text()).includes('Two-step verification required'),
+    `"Log out" on the verify page logs the user out (HTTP ${r.status()}, at ${page.url()})`);
+  await ctx.close();
+
   // replay of the same code in another session
   ctx = await browser.newContext();
   page = await ctx.newPage();
@@ -274,6 +286,20 @@ try {
   assert(r.status() === 401, `UPM REST is refused before the second step (HTTP ${r.status()})`);
   await ctx.close();
   await adminApi('DELETE', '/rest/api/2/user?username=' + BOSS.name);
+
+  // ---- 9c. recovery_admin (Jira recovery mode) is never challenged
+  if (process.env.JIRA_RECOVERY_PASS) {
+    ctx = await browser.newContext();
+    page = await ctx.newPage();
+    await login(page, { name: 'recovery_admin', pass: process.env.JIRA_RECOVERY_PASS });
+    assert(inJira(page), `recovery_admin reaches Jira in the browser without a second step (at ${page.url()})`);
+    r = await page.request.get(BASE + '/plugins/servlet/mfa/admin', { maxRedirects: 0 });
+    assert(r.status() === 200 || (r.status() === 302 && (r.headers().location || '').includes('WebSudo')),
+      `recovery_admin can open the MFA admin page (HTTP ${r.status()})`);
+    await ctx.close();
+  } else {
+    console.log('note - JIRA_RECOVERY_PASS not set, recovery_admin browser login not checked');
+  }
 
   // ---- 9. audit log -------------------------------------------------------------------------
   a = await adminApi('GET', '/rest/auditing/1.0/events?limit=200');

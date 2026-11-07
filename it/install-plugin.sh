@@ -2,8 +2,11 @@
 # Uploads the plugin jar to a Jira instance through the UPM REST API and waits
 # until the plugin reports enabled.
 # Usage: it/install-plugin.sh <jar>
-# Auth: JIRA_PAT (Bearer, preferred once the plugin blocks Basic auth) or
-#       JIRA_ADMIN_USER / JIRA_ADMIN_PASS (Basic).
+# Auth: JIRA_ADMIN_USER / JIRA_ADMIN_PASS (Basic). UPM did not issue its upload
+#       token to a personal access token in the test, so JIRA_PAT works only for
+#       the status check. Once the plugin is active it refuses Basic for enforced
+#       administrators: use recovery_admin (recovery mode) or an administrator on
+#       the plugin's Basic allow-list.
 set -euo pipefail
 jar="$1"
 base="${JIRA_BASE_URL:-http://localhost:18080}"

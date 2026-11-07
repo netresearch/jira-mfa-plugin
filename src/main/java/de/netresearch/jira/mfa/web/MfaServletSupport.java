@@ -1,5 +1,7 @@
 package de.netresearch.jira.mfa.web;
 
+import com.atlassian.jira.component.ComponentAccessor;
+import com.atlassian.jira.security.xsrf.XsrfTokenGenerator;
 import com.atlassian.jira.user.ApplicationUser;
 import de.netresearch.jira.mfa.service.MfaService;
 
@@ -70,8 +72,11 @@ abstract class MfaServletSupport extends HttpServlet {
         return req.getContextPath() + target;
     }
 
+    /** Jira 9.12 answers 403 to /logout without its XSRF token. */
     static String logoutForm(HttpServletRequest req) {
-        return "<p class=\"muted\"><a href=\"" + Html.esc(req.getContextPath() + "/logout") + "\">Log out</a></p>";
+        String token = ComponentAccessor.getComponent(XsrfTokenGenerator.class).generateToken(req);
+        String href = req.getContextPath() + "/logout?atl_token=" + URLEncoder.encode(token, StandardCharsets.UTF_8);
+        return "<p class=\"muted\"><a id=\"logout\" href=\"" + Html.esc(href) + "\">Log out</a></p>";
     }
 
     static void json(HttpServletResponse resp, int status, String body) throws IOException {
