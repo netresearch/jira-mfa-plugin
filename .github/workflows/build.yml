@@ -19,5 +19,4 @@ jobs:
           distribution: temurin
           java-version: '11'
           cache: maven
-      # build/maven-settings.xml adds Atlassian's public Maven repository (AMPS, Jira API)
-      - run: mvn -B -s build/maven-settings.xml package
+      - run: mvn -B package

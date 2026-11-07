@@ -46,7 +46,7 @@ Refusing Basic as soon as a user has enrolled is deliberate: if the password alo
 
 ## Build
 
-The host needs only Docker. Maven runs in `maven:3.9.9-eclipse-temurin-11` with the Atlassian public repository (`build/maven-settings.xml`) and a local repository in `~/.cache/jira-mfa-m2` (override with `MAVEN_CACHE`), which the script creates:
+The host needs only Docker. Maven runs in `maven:3.9.9-eclipse-temurin-11` (the Atlassian public repository is declared in `pom.xml`) and a local repository in `~/.cache/jira-mfa-m2` (override with `MAVEN_CACHE`), which the script creates:
 
 ```bash
 build/mvn.sh -B package          # runs the unit tests
