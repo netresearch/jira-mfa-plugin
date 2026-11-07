@@ -1,0 +1,10 @@
+{
+  "name": "jira-mfa-plugin-it",
+  "private": true,
+  "type": "module",
+  "description": "Browser integration tests for jira-mfa-plugin against a Docker Jira 9.12.3",
+  "devDependencies": {
+    "playwright-core": "1.57.0",
+    "otplib": "12.0.1"
+  }
+}

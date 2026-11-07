@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<atlassian-plugin key="${atlassian.plugin.key}" name="${project.name}" plugins-version="2">
+    <plugin-info>
+        <description>${project.description}</description>
+        <version>${project.version}</version>
+        <vendor name="${project.organization.name}" url="${project.organization.url}"/>
+        <param name="configure.url">/plugins/servlet/mfa/admin</param>
+    </plugin-info>
+
+    <ao key="ao-module" namespace="NRMFA">
+        <description>MFA state: users, passkeys, recovery codes</description>
+        <entity>de.netresearch.jira.mfa.ao.MfaUser</entity>
+        <entity>de.netresearch.jira.mfa.ao.MfaPasskey</entity>
+        <entity>de.netresearch.jira.mfa.ao.MfaRecoveryCode</entity>
+    </ao>
+
+    <!-- before-dispatch: Seraph and the token filters have set the user by then -->
+    <servlet-filter key="mfa-filter" class="de.netresearch.jira.mfa.web.MfaFilter" location="before-dispatch" weight="1">
+        <url-pattern>/*</url-pattern>
+        <dispatcher>REQUEST</dispatcher>
+    </servlet-filter>
+
+    <servlet key="mfa-verify" class="de.netresearch.jira.mfa.web.VerifyServlet">
+        <url-pattern>/mfa/verify</url-pattern>
+    </servlet>
+    <servlet key="mfa-setup" class="de.netresearch.jira.mfa.web.SetupServlet">
+        <url-pattern>/mfa/setup</url-pattern>
+    </servlet>
+    <servlet key="mfa-webauthn" class="de.netresearch.jira.mfa.web.WebAuthnServlet">
+        <url-pattern>/mfa/webauthn/*</url-pattern>
+    </servlet>
+    <servlet key="mfa-admin" class="de.netresearch.jira.mfa.web.AdminServlet">
+        <url-pattern>/mfa/admin</url-pattern>
+    </servlet>
+
+    <web-resource key="mfa-assets" name="MFA page script">
+        <resource type="download" name="mfa.js" location="static/mfa.js"/>
+    </web-resource>
+
+    <web-item key="mfa-profile-link" section="system.user.options/personal" weight="100">
+        <label>Two-step verification</label>
+        <link linkId="mfa-setup-link">/plugins/servlet/mfa/setup</link>
+    </web-item>
+    <web-item key="mfa-admin-link" section="system.admin/security" weight="200">
+        <label>Two-step verification</label>
+        <link linkId="mfa-admin-link">/plugins/servlet/mfa/admin</link>
+        <condition class="com.atlassian.jira.plugin.webfragment.conditions.UserIsSysAdminCondition"/>
+    </web-item>
+</atlassian-plugin>

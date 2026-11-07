@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>de.netresearch.jira</groupId>
+  <artifactId>jira-mfa-plugin</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>atlassian-plugin</packaging>
+
+  <name>Netresearch Jira MFA</name>
+  <description>Mandatory second factor (TOTP and passkeys) for browser logins on Jira Server 9.12.</description>
+  <organization>
+    <name>Netresearch DTT GmbH</name>
+    <url>https://www.netresearch.de/</url>
+  </organization>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>11</maven.compiler.release>
+    <!-- Host versions, read from the bundled jars of atlassian/jira-software:9.12.3 -->
+    <jira.version>9.12.3</jira.version>
+    <amps.version>8.17.7</amps.version>
+    <ao.version>5.0.3</ao.version>
+    <sal.version>5.0.3</sal.version>
+    <template.renderer.version>5.0.4</template.renderer.version>
+    <audit.api.version>1.15.1</audit.api.version>
+    <spring.scanner.version>3.0.3</spring.scanner.version>
+    <!-- Embedded libraries -->
+    <webauthn.version>2.10.1</webauthn.version>
+    <jackson.version>2.18.2</jackson.version>
+    <java.otp.version>1.0.0</java.otp.version>
+    <zxing.version>3.5.4</zxing.version>
+    <commons.codec.version>1.15</commons.codec.version>
+    <junit.version>5.11.4</junit.version>
+    <atlassian.plugin.key>${project.groupId}.${project.artifactId}</atlassian.plugin.key>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- One Jackson version for the embedded WebAuthn stack -->
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- Provided by Jira -->
+    <dependency>
+      <groupId>com.atlassian.jira</groupId>
+      <artifactId>jira-api</artifactId>
+      <version>${jira.version}</version>
+      <scope>provided</scope>
+      <exclusions>
+        <!-- not published in any public repository; not needed to compile against -->
+        <exclusion>
+          <groupId>commons-httpclient</groupId>
+          <artifactId>commons-httpclient</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>com.atlassian.activeobjects</groupId>
+      <artifactId>activeobjects-plugin</artifactId>
+      <version>${ao.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.atlassian.sal</groupId>
+      <artifactId>sal-api</artifactId>
+      <version>${sal.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.atlassian.templaterenderer</groupId>
+      <artifactId>atlassian-template-renderer-api</artifactId>
+      <version>${template.renderer.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.atlassian.audit</groupId>
+      <artifactId>atlassian-audit-api</artifactId>
+      <version>${audit.api.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.atlassian.plugin</groupId>
+      <artifactId>atlassian-spring-scanner-annotation</artifactId>
+      <version>${spring.scanner.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>javax.inject</groupId>
+      <artifactId>javax.inject</artifactId>
+      <version>1</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>javax.servlet</groupId>
+      <artifactId>javax.servlet-api</artifactId>
+      <version>4.0.1</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <!-- platform library: Jira 9.12.3 ships commons-codec 1.15 -->
+      <groupId>commons-codec</groupId>
+      <artifactId>commons-codec</artifactId>
+      <version>${commons.codec.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>1.7.36</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Embedded into the plugin jar (META-INF/lib) -->
+    <dependency>
+      <groupId>com.yubico</groupId>
+      <artifactId>webauthn-server-core</artifactId>
+      <version>${webauthn.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.slf4j</groupId>
+          <artifactId>slf4j-api</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <!-- compile scope: the WebAuthn API declares Jackson exceptions -->
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.eatthepath</groupId>
+      <artifactId>java-otp</artifactId>
+      <version>${java.otp.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.zxing</groupId>
+      <artifactId>core</artifactId>
+      <version>${zxing.version}</version>
+    </dependency>
+
+    <!-- Tests -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>com.atlassian.maven.plugins</groupId>
+        <artifactId>jira-maven-plugin</artifactId>
+        <version>${amps.version}</version>
+        <extensions>true</extensions>
+        <configuration>
+          <productVersion>${jira.version}</productVersion>
+          <enableQuickReload>false</enableQuickReload>
+          <extractDependencies>false</extractDependencies>
+          <!-- The embedded Jackson must be internally consistent; the host's
+               jackson-annotations (2.14) is older than the embedded databind. -->
+          <banningExcludes>
+            <exclude>com.fasterxml.jackson.core:jackson-annotations</exclude>
+          </banningExcludes>
+          <skipManifestValidation>false</skipManifestValidation>
+          <instructions>
+            <Atlassian-Plugin-Key>${atlassian.plugin.key}</Atlassian-Plugin-Key>
+            <Export-Package/>
+            <Spring-Context>*</Spring-Context>
+            <!-- Embedded libraries (Jackson, Guava, CBOR, ...) must load from
+                 META-INF/lib, not from the host, so they are not imported. -->
+            <Import-Package>
+              com.atlassian.jira.*,
+              com.atlassian.activeobjects.*,
+              com.atlassian.sal.api.*,
+              com.atlassian.templaterenderer.*,
+              com.atlassian.audit.*,
+              com.atlassian.crowd.embedded.api,
+              com.atlassian.seraph.*;resolution:=optional,
+              javax.inject,
+              javax.servlet,
+              javax.servlet.http,
+              javax.crypto,
+              javax.crypto.spec,
+              net.java.ao,
+              net.java.ao.schema,
+              org.slf4j,
+              org.springframework.osgi.*;resolution:=optional,
+              org.eclipse.gemini.blueprint.*;resolution:=optional,
+              !com.fasterxml.jackson.*,
+              !com.google.common.*,
+              !com.google.zxing.*,
+              !com.upokecenter.*,
+              !com.yubico.*,
+              !com.eatthepath.*,
+              org.apache.commons.codec.binary,
+              !org.apache.hc.*,
+              *;resolution:=optional
+            </Import-Package>
+          </instructions>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>com.atlassian.plugin</groupId>
+        <artifactId>atlassian-spring-scanner-maven-plugin</artifactId>
+        <version>${spring.scanner.version}</version>
+        <executions>
+          <execution>
+            <goals>
+              <goal>atlassian-spring-scanner</goal>
+            </goals>
+            <phase>process-classes</phase>
+          </execution>
+        </executions>
+        <configuration>
+          <verbose>false</verbose>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>

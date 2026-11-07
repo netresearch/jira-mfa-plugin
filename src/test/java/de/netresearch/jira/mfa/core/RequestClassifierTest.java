@@ -1,0 +1,49 @@
+package de.netresearch.jira.mfa.core;
+
+import de.netresearch.jira.mfa.core.RequestClassifier.AuthScheme;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class RequestClassifierTest {
+    @Test
+    void relativePathStripsContextAndPathParameters() {
+        assertEquals("/secure/Dashboard.jspa", RequestClassifier.relativePath("/jira/secure/Dashboard.jspa", "/jira"));
+        assertEquals("/browse/X-1", RequestClassifier.relativePath("/browse/X-1;jsessionid=abc", ""));
+        assertEquals("/", RequestClassifier.relativePath("/jira", "/jira"));
+    }
+
+    @Test
+    void onlyPluginPagesAndStaticResourcesAreOpen() {
+        assertTrue(RequestClassifier.isOpen("/plugins/servlet/mfa/verify"));
+        assertTrue(RequestClassifier.isOpen("/s/abc/_/download/resources/x.js"));
+        assertTrue(RequestClassifier.isOpen("/download/resources/de.netresearch.jira.jira-mfa-plugin:mfa-assets/mfa.js"));
+        assertTrue(RequestClassifier.isOpen("/logout"));
+        assertFalse(RequestClassifier.isOpen("/secure/Dashboard.jspa"));
+        assertFalse(RequestClassifier.isOpen("/rest/api/2/myself"));
+        assertFalse(RequestClassifier.isOpen("/rest/plugins/1.0/safe-mode"));
+        assertFalse(RequestClassifier.isOpen("/plugins/servlet/mfa/../../secure/admin"), "no traversal");
+        assertFalse(RequestClassifier.isOpen("/plugins/servlet/mfaX"));
+    }
+
+    @Test
+    void apiDetection() {
+        assertTrue(RequestClassifier.isApiRequest("/rest/api/2/issue/X-1", "text/html", null));
+        assertTrue(RequestClassifier.isApiRequest("/secure/QuickCreateIssue!default.jspa", null, "XMLHttpRequest"));
+        assertTrue(RequestClassifier.isApiRequest("/secure/x", "application/json", null));
+        assertFalse(RequestClassifier.isApiRequest("/secure/Dashboard.jspa", "text/html,application/xhtml+xml", null));
+        assertFalse(RequestClassifier.isApiRequest("/browse/X-1", null, null));
+        assertFalse(RequestClassifier.isApiRequest("/browse/X-1", "*/*", null));
+    }
+
+    @Test
+    void authorizationSchemes() {
+        assertEquals(AuthScheme.NONE, RequestClassifier.scheme(null));
+        assertEquals(AuthScheme.BASIC, RequestClassifier.scheme("Basic YTpi"));
+        assertEquals(AuthScheme.BEARER, RequestClassifier.scheme("bearer abc"));
+        assertEquals(AuthScheme.OAUTH, RequestClassifier.scheme("OAuth oauth_consumer_key=\"x\""));
+        assertEquals(AuthScheme.OTHER, RequestClassifier.scheme("Negotiate abc"));
+    }
+}
