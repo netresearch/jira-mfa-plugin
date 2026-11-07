@@ -16,11 +16,11 @@ public final class UserStatus {
         IN_GRACE_PERIOD("Grace period running"),
         /** Enforced, no factor, never seen since enforcement: the grace period starts at the next login. */
         GRACE_NOT_STARTED("Grace period not started"),
-        /** At least one authenticator app or passkey. */
+        /** At least one authenticator app or passkey, asked for at login. */
         SET_UP("Set up"),
-        /** Listed as exempt user or member of an exempt group. */
+        /** Listed as exempt user or member of an exempt group: never asked, even with a factor. */
         EXEMPT("Exempt"),
-        /** Not covered by the enforced groups, or two-step verification is switched off. */
+        /** Two-step verification switched off, or not in the enforced groups and without a factor. */
         NOT_ENFORCED("Not enforced");
 
         private final String label;
@@ -73,11 +73,16 @@ public final class UserStatus {
         boolean hasFactor = authenticatorApp || passkeys > 0;
         Instant graceEnd = firstSeen == null ? null : EnforcementPolicy.graceEnd(s, firstSeen);
         State state;
-        if (hasFactor) {
-            state = State.SET_UP;
+        // Same order as EnforcementPolicy.evaluate: switched off and exempt
+        // users are never asked for their factor, even when they have one.
+        if (!s.enabled) {
+            state = State.NOT_ENFORCED;
             graceEnd = null;
-        } else if (s.enabled && EnforcementPolicy.isExempt(s, username, groups)) {
+        } else if (EnforcementPolicy.isExempt(s, username, groups)) {
             state = State.EXEMPT;
+            graceEnd = null;
+        } else if (hasFactor) {
+            state = State.SET_UP;
             graceEnd = null;
         } else if (!EnforcementPolicy.isEnforced(s, username, groups)) {
             state = State.NOT_ENFORCED;

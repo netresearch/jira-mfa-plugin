@@ -61,6 +61,39 @@ class UserStatusTest {
         MfaSettings s = settings(Set.of(), Set.of(), Set.of("emergency"), false);
         assertEquals(State.NOT_ENFORCED, noFactor(s, "a", STAFF, SEEN, AFTER_GRACE).state);
         assertEquals(State.NOT_ENFORCED, noFactor(s, "emergency", STAFF, SEEN, AFTER_GRACE).state);
+        assertEquals(State.NOT_ENFORCED, UserStatus.of(s, "a", STAFF, new UserStatus.Factors(true, 1, 10), SEEN, AFTER_GRACE).state,
+                "switched off, nobody is asked for a factor, even one that exists");
+    }
+
+    @Test
+    void anExemptUserWithAFactorIsExemptLikeTheFilterSeesIt() {
+        MfaSettings s = settings(Set.of(), Set.of("service-accounts"), Set.of(), true);
+        UserStatus st = UserStatus.of(s, "bot", List.of("service-accounts"), new UserStatus.Factors(true, 0, 10), SEEN, AFTER_GRACE);
+        assertEquals(State.EXEMPT, st.state);
+        assertEquals(EnforcementPolicy.Requirement.NONE,
+                EnforcementPolicy.evaluate(s, "bot", List.of("service-accounts"), true, SEEN, AFTER_GRACE), "the filter does not ask");
+        assertEquals(true, st.authenticatorApp, "the stored factor is still shown");
+    }
+
+    @Test
+    void agreesWithWhatTheFilterAsksForInEveryCombination() {
+        for (boolean enabled : new boolean[]{true, false}) {
+            for (Set<String> enforced : List.of(Set.<String>of(), Set.of("staff"))) {
+                for (List<String> groups : List.of(STAFF, List.of("customers"), List.of("staff", "service-accounts"))) {
+                    for (boolean factor : new boolean[]{true, false}) {
+                        MfaSettings s = settings(enforced, Set.of("service-accounts"), Set.of(), enabled);
+                        String what = "enabled=" + enabled + " enforced=" + enforced + " groups=" + groups + " factor=" + factor;
+                        State st = UserStatus.of(s, "u", groups, new UserStatus.Factors(factor, 0, 0), SEEN, IN_GRACE).state;
+                        EnforcementPolicy.Requirement r = EnforcementPolicy.evaluate(s, "u", groups, factor, SEEN, IN_GRACE);
+                        State expected = r == EnforcementPolicy.Requirement.VERIFY ? State.SET_UP
+                                : r == EnforcementPolicy.Requirement.ENROL_OPTIONAL ? State.IN_GRACE_PERIOD
+                                : r == EnforcementPolicy.Requirement.ENROL_REQUIRED ? State.ENROLMENT_REQUIRED
+                                : enabled && EnforcementPolicy.isExempt(s, "u", groups) ? State.EXEMPT : State.NOT_ENFORCED;
+                        assertEquals(expected, st, what);
+                    }
+                }
+            }
+        }
     }
 
     @Test
