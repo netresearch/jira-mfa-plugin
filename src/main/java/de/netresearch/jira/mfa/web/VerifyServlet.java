@@ -85,7 +85,7 @@ public class VerifyServlet extends MfaServletSupport {
                     .append(error != null ? " aria-describedby=\"code-error\" aria-invalid=\"true\"" : "")
                     .append(" required><button type=\"submit\" id=\"verify-submit\">Verify</button></form>");
         }
-        b.append("</div>").append(logoutForm(req));
-        Html.page(resp, "Two-step verification", b.toString(), scriptUrl(req));
+        b.append("</div>");
+        Html.page(resp, "Two-step verification", header(req, u, false), b.toString(), scriptUrl(req));
     }
 }

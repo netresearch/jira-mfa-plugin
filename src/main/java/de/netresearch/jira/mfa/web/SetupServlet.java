@@ -256,10 +256,7 @@ public class SetupServlet extends MfaServletSupport {
                     .append("<form method=\"post\">").append(csrfField(req)).append(Html.hidden("action", "recovery-regenerate"))
                     .append("<button type=\"submit\" class=\"secondary\" id=\"recovery-regenerate\">Create new recovery codes</button></form></div>");
         }
-        if (mfa.isVerified(session, u) || r == Requirement.NONE) {
-            b.append("<p><a href=\"").append(Html.esc(ctx)).append("/secure/Dashboard.jspa\">Back to Jira</a></p>");
-        }
-        b.append(logoutForm(req));
-        Html.page(resp, "Two-step verification setup", b.toString(), scriptUrl(req));
+        Html.page(resp, "Two-step verification setup", header(req, u, mfa.isVerified(session, u) || r == Requirement.NONE),
+                b.toString(), scriptUrl(req));
     }
 }

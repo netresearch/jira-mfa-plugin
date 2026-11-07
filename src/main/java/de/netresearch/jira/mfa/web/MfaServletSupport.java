@@ -91,11 +91,25 @@ abstract class MfaServletSupport extends HttpServlet {
         return true;
     }
 
-    /** Jira 9.12 answers 403 to /logout without its XSRF token. */
-    static String logoutForm(HttpServletRequest req) {
-        String token = ComponentAccessor.getComponent(XsrfTokenGenerator.class).generateToken(req);
-        String href = req.getContextPath() + "/logout?atl_token=" + URLEncoder.encode(token, StandardCharsets.UTF_8);
-        return "<p class=\"muted\"><a id=\"logout\" href=\"" + Html.esc(href) + "\">Log out</a></p>";
+    /**
+     * The bar at the top of every plugin page: a way back into Jira (only when
+     * Jira would let the session in, otherwise the link would just bounce back
+     * here), who is logged in, and Log out. Jira 9.12 answers 403 to /logout
+     * without its XSRF token.
+     */
+    static String header(HttpServletRequest req, ApplicationUser u, boolean backToJira) {
+        String ctx = req.getContextPath();
+        String xsrf = ComponentAccessor.getComponent(XsrfTokenGenerator.class).generateToken(req);
+        String logout = ctx + "/logout?atl_token=" + URLEncoder.encode(xsrf, StandardCharsets.UTF_8);
+        StringBuilder b = new StringBuilder("<header class=\"topbar\"><nav aria-label=\"Jira\">");
+        if (backToJira) {
+            b.append("<a class=\"home\" id=\"back-to-jira\" href=\"").append(Html.esc(ctx)).append("/secure/Dashboard.jspa\">\u2190 Back to Jira</a>");
+        } else {
+            b.append("<span class=\"home\">Jira</span>");
+        }
+        b.append("<span class=\"who\">").append(Html.esc(u.getDisplayName())).append("</span>")
+                .append("<a id=\"logout\" href=\"").append(Html.esc(logout)).append("\">Log out</a></nav></header>");
+        return b.toString();
     }
 
     static void json(HttpServletResponse resp, int status, String body) throws IOException {
