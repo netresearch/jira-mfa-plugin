@@ -49,11 +49,27 @@ public final class UserStatus {
         this.graceEnd = graceEnd;
     }
 
+    /** What a user has stored. */
+    public static final class Factors {
+        final boolean authenticatorApp;
+        final int passkeys;
+        final int recoveryCodes;
+
+        public Factors(boolean authenticatorApp, int passkeys, int recoveryCodes) {
+            this.authenticatorApp = authenticatorApp;
+            this.passkeys = passkeys;
+            this.recoveryCodes = recoveryCodes;
+        }
+    }
+
     /**
      * @param firstSeen start of the grace period, or null when it has not started
      */
-    public static UserStatus of(MfaSettings s, String username, Collection<String> groups, boolean authenticatorApp,
-                                int passkeys, int recoveryCodes, Instant firstSeen, Instant now) {
+    public static UserStatus of(MfaSettings s, String username, Collection<String> groups, Factors f,
+                                Instant firstSeen, Instant now) {
+        boolean authenticatorApp = f.authenticatorApp;
+        int passkeys = f.passkeys;
+        int recoveryCodes = f.recoveryCodes;
         boolean hasFactor = authenticatorApp || passkeys > 0;
         Instant graceEnd = firstSeen == null ? null : EnforcementPolicy.graceEnd(s, firstSeen);
         State state;

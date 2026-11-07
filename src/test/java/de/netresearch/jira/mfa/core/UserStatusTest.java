@@ -22,15 +22,15 @@ class UserStatusTest {
     }
 
     private static UserStatus noFactor(MfaSettings s, String user, List<String> groups, Instant firstSeen, Instant now) {
-        return UserStatus.of(s, user, groups, false, 0, 0, firstSeen, now);
+        return UserStatus.of(s, user, groups, new UserStatus.Factors(false, 0, 0), firstSeen, now);
     }
 
     @Test
     void aFactorMeansSetUpWhateverTheEnforcement() {
         MfaSettings s = settings(Set.of("staff"), Set.of(), Set.of(), true);
-        assertEquals(State.SET_UP, UserStatus.of(s, "a", STAFF, true, 0, 10, SEEN, AFTER_GRACE).state);
-        assertEquals(State.SET_UP, UserStatus.of(s, "c", List.of("customers"), false, 2, 0, null, AFTER_GRACE).state);
-        UserStatus st = UserStatus.of(s, "a", STAFF, false, 1, 3, SEEN, AFTER_GRACE);
+        assertEquals(State.SET_UP, UserStatus.of(s, "a", STAFF, new UserStatus.Factors(true, 0, 10), SEEN, AFTER_GRACE).state);
+        assertEquals(State.SET_UP, UserStatus.of(s, "c", List.of("customers"), new UserStatus.Factors(false, 2, 0), null, AFTER_GRACE).state);
+        UserStatus st = UserStatus.of(s, "a", STAFF, new UserStatus.Factors(false, 1, 3), SEEN, AFTER_GRACE);
         assertEquals(1, st.passkeys);
         assertEquals(3, st.recoveryCodes);
         assertNull(st.graceEnd, "a grace end is meaningless once a factor exists");

@@ -194,8 +194,8 @@ public class MfaService {
             MfaUser row = rows.get(key);
             boolean app = row != null && row.getTotpSecret() != null;
             Instant firstSeen = row != null && row.getFirstSeen() > 0 ? Instant.ofEpochMilli(row.getFirstSeen()) : null;
-            UserStatus st = UserStatus.of(s, u.getUsername(), env.groups(u), app, passkeyCounts.getOrDefault(key, 0),
-                    codeCounts.getOrDefault(key, 0), firstSeen, now);
+            UserStatus st = UserStatus.of(s, u.getUsername(), env.groups(u),
+                    new UserStatus.Factors(app, passkeyCounts.getOrDefault(key, 0), codeCounts.getOrDefault(key, 0)), firstSeen, now);
             out.add(new Overview(u, st));
         }
         return out;

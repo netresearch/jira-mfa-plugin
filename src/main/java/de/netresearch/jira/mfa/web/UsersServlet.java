@@ -82,6 +82,11 @@ public class UsersServlet extends MfaServletSupport {
         return hay != null && hay.toLowerCase(Locale.ROOT).contains(needle);
     }
 
+    /** A table cell; values are numbers, dates or fixed words, so they need no escaping. */
+    private static String td(Object value) {
+        return "<td>" + value + "</td>";
+    }
+
     private static String graceEnd(UserStatus st) {
         return st.graceEnd == null ? "" : DATE.format(st.graceEnd);
     }
@@ -153,10 +158,10 @@ public class UsersServlet extends MfaServletSupport {
                     .append(o.user.isActive() ? "" : " (inactive)").append("</span></td>")
                     .append("<td class=\"state-").append(st.state.name().toLowerCase(Locale.ROOT)).append("\">")
                     .append(Html.esc(st.state.label())).append("</td>")
-                    .append("<td>").append(st.authenticatorApp ? "yes" : "no").append("</td>")
-                    .append("<td>").append(st.passkeys).append("</td>")
-                    .append("<td>").append(st.recoveryCodes).append("</td>")
-                    .append("<td>").append(graceEnd(st)).append("</td>")
+                    .append(td(st.authenticatorApp ? "yes" : "no"))
+                    .append(td(st.passkeys))
+                    .append(td(st.recoveryCodes))
+                    .append(td(graceEnd(st)))
                     .append("<td><a href=\"").append(Html.esc(ctx + SERVLET + "/admin?user=" + enc)).append("\">Details</a></td></tr>");
         }
         b.append("</tbody></table></div>");
