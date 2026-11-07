@@ -3,6 +3,7 @@ package de.netresearch.jira.mfa.web;
 import com.atlassian.jira.user.ApplicationUser;
 import com.yubico.webauthn.exception.RegistrationFailedException;
 import de.netresearch.jira.mfa.core.AttemptLimiter;
+import de.netresearch.jira.mfa.core.LogText;
 import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
 import de.netresearch.jira.mfa.core.RequestClassifier;
 import de.netresearch.jira.mfa.service.MfaService;
@@ -140,7 +141,7 @@ public class WebAuthnServlet extends MfaServletSupport {
                     return;
                 }
                 default:
-                    LOG.info("unknown WebAuthn endpoint: servletPath={} pathInfo={}", req.getServletPath(), req.getPathInfo());
+                    LOG.info("unknown WebAuthn endpoint: servletPath={} pathInfo={}", LogText.clean(req.getServletPath()), LogText.clean(req.getPathInfo()));
                     json(resp, 404, "{\"error\":\"unknown endpoint\"}");
             }
         } catch (RegistrationFailedException e) {

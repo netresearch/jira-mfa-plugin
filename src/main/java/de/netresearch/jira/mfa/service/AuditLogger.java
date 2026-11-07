@@ -1,5 +1,6 @@
 package de.netresearch.jira.mfa.service;
 
+import de.netresearch.jira.mfa.core.LogText;
 import com.atlassian.audit.api.AuditService;
 import com.atlassian.audit.entity.AuditAttribute;
 import com.atlassian.audit.entity.AuditEvent;
@@ -56,7 +57,7 @@ public class AuditLogger {
 
     public void log(Action action, ApplicationUser subject, Map<String, String> details) {
         String who = subject == null ? "-" : subject.getUsername();
-        LOG.info("{} user={} {}", action.label, who, details);
+        LOG.info("{} user={} {}", action.label, LogText.clean(who), LogText.clean(details));
         try {
             AuditType type = AuditType.fromI18nKeys(CoverageArea.SECURITY, CoverageLevel.BASE,
                             CATEGORY_KEY, "de.netresearch.jira.mfa.audit." + action.name().toLowerCase())

@@ -2,6 +2,7 @@ package de.netresearch.jira.mfa.web;
 
 import com.atlassian.jira.user.ApplicationUser;
 import de.netresearch.jira.mfa.core.BasicAuthRule;
+import de.netresearch.jira.mfa.core.LogText;
 import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
 import de.netresearch.jira.mfa.core.RequestClassifier;
 import de.netresearch.jira.mfa.core.RequestClassifier.AuthScheme;
@@ -69,7 +70,7 @@ public class MfaFilter implements Filter {
             user = mfa.env().currentUser();
         } catch (RuntimeException e) {
             // Fail closed, as below: without the user the second step cannot be checked.
-            LOG.error("MFA check could not determine the user on {}", req.getRequestURI(), e);
+            LOG.error("MFA check could not determine the user on {}", LogText.clean(req.getRequestURI()), e);
             MfaServletSupport.json(resp, 503, "{\"errorMessages\":[\"Two-step verification is temporarily unavailable.\"]}");
             return;
         }
@@ -82,7 +83,7 @@ public class MfaFilter implements Filter {
             d = decide(req, user);
         } catch (RuntimeException e) {
             // Fail closed: an error in the plugin must not silently disable the second factor.
-            LOG.error("MFA check failed for {} on {}", user.getUsername(), req.getRequestURI(), e);
+            LOG.error("MFA check failed for {} on {}", LogText.clean(user.getUsername()), LogText.clean(req.getRequestURI()), e);
             d = Decision.ERROR;
         }
         switch (d) {
