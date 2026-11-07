@@ -1,0 +1,106 @@
+name: Release
+
+# On a pushed v* tag: build the plugin jar from the tag, publish a GitHub
+# release with the jar and its checksum, and attest the jar's build
+# provenance through the organisation's reusable (SLSA Build Level 2: the
+# build runs in this repository).
+#
+# Verify a downloaded jar with:
+#   gh attestation verify jira-mfa-plugin-<version>.jar --repo netresearch/jira-mfa-plugin \
+#     --signer-workflow netresearch/.github/.github/workflows/attest-release-files.yml
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Refuse a lightweight tag and a version mismatch
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          if [[ "$(git cat-file -t "refs/tags/${TAG}")" != "tag" ]]; then
+            echo "::error::Tag ${TAG} is lightweight; push an annotated, signed tag."
+            exit 1
+          fi
+          version=$(yq -p xml -o yaml '.project.version' pom.xml)
+          if [[ "v${version}" != "${TAG}" ]]; then
+            echo "::error::pom.xml version ${version} does not match tag ${TAG}."
+            exit 1
+          fi
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '11'
+          cache: maven
+      - run: mvn -B package
+      - name: Collect the release files
+        run: |
+          set -euo pipefail
+          mkdir dist
+          cp target/jira-mfa-plugin-*.jar dist/
+          (cd dist && sha256sum -- *.jar > checksums.txt)
+          ls -l dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      # A draft first, published once every file is on it.
+      - name: Create, fill and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            echo "::error::A release for ${TAG} exists already; push a new tag instead."
+            exit 1
+          fi
+          gh release create "$TAG" --repo "$REPO" --draft --verify-tag --title "$TAG" --generate-notes
+          for f in dist/*; do
+            for attempt in 1 2 3 4; do
+              if gh release upload "$TAG" "$f" --repo "$REPO" --clobber; then
+                break
+              fi
+              if [[ "$attempt" == 4 ]]; then
+                echo "::error::Uploading ${f} failed four times."
+                exit 1
+              fi
+              sleep $((attempt * 5))
+            done
+          done
+          gh release edit "$TAG" --repo "$REPO" --draft=false
+
+  attest:
+    needs: release
+    uses: netresearch/.github/.github/workflows/attest-release-files.yml@main
+    permissions:
+      id-token: write
+      attestations: write
+    with:
+      subject-path: 'dist/*.jar'
