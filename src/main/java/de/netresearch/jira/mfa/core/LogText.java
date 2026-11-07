@@ -17,7 +17,7 @@ public final class LogText {
         StringBuilder b = new StringBuilder(s.length());
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
-            b.append(c < 0x20 || c == 0x7f || c == ' ' || c == ' ' ? '_' : c);
+            b.append(c < 0x20 || c == 0x7f || c == 0x2028 || c == 0x2029 ? '_' : c);
         }
         return b.toString();
     }

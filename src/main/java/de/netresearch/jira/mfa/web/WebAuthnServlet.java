@@ -141,7 +141,10 @@ public class WebAuthnServlet extends MfaServletSupport {
                     return;
                 }
                 default:
-                    LOG.info("unknown WebAuthn endpoint: servletPath={} pathInfo={}", LogText.clean(req.getServletPath()), LogText.clean(req.getPathInfo()));
+                    if (LOG.isInfoEnabled()) {
+                        LOG.info("unknown WebAuthn endpoint: servletPath={} pathInfo={}",
+                                LogText.clean(req.getServletPath()), LogText.clean(req.getPathInfo()));
+                    }
                     json(resp, 404, "{\"error\":\"unknown endpoint\"}");
             }
         } catch (RegistrationFailedException e) {
