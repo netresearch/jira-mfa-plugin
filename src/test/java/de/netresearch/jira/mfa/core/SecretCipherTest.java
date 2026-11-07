@@ -34,9 +34,15 @@ class SecretCipherTest {
         SecretCipher c = SecretCipher.fromKeyFile(dir.resolve("a.key"));
         SecretCipher other = SecretCipher.fromKeyFile(dir.resolve("b.key"));
         String enc = c.encrypt(new byte[]{1, 2, 3});
-        char[] chars = enc.toCharArray();
-        chars[chars.length - 3] = chars[chars.length - 3] == 'A' ? 'B' : 'A';
-        assertThrows(IllegalStateException.class, () -> c.decrypt(new String(chars)));
+        // Flip a bit in the decoded bytes. Editing a base64 character instead can hit
+        // the padding bits of the last group and leave the bytes unchanged.
+        byte[] raw = java.util.Base64.getDecoder().decode(enc.substring("v1:".length()));
+        for (int i : new int[]{0, 12, raw.length - 1}) { // IV, ciphertext, tag
+            byte[] tampered = raw.clone();
+            tampered[i] ^= 0x01;
+            String t = "v1:" + java.util.Base64.getEncoder().encodeToString(tampered);
+            assertThrows(IllegalStateException.class, () -> c.decrypt(t), "byte " + i);
+        }
         assertThrows(IllegalStateException.class, () -> other.decrypt(enc));
         assertThrows(IllegalArgumentException.class, () -> c.decrypt("plain"));
     }

@@ -1,6 +1,7 @@
 package de.netresearch.jira.mfa.web;
 
 import com.atlassian.jira.user.ApplicationUser;
+import de.netresearch.jira.mfa.core.BasicAuthRule;
 import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
 import de.netresearch.jira.mfa.core.RequestClassifier;
 import de.netresearch.jira.mfa.core.RequestClassifier.AuthScheme;
@@ -32,9 +33,9 @@ import java.util.Base64;
  *   check; the mere presence of an {@code Authorization: Bearer} header is not
  *   trusted, because Jira falls back to the session cookie when the token is
  *   invalid.</li>
- *   <li>HTTP Basic requests by users who must use a second factor are
- *   rejected unless Basic is allowed for them (password-only REST would
- *   bypass the second factor).</li>
+ *   <li>HTTP Basic requests are decided by {@link BasicAuthRule}: refused once
+ *   the user has a factor or the grace period has expired, unless the user is
+ *   allow-listed (password-only REST would bypass the second factor).</li>
  *   <li>Browser sessions must complete the second step (or enrolment) before
  *   anything but the plugin's own pages and static resources is served.</li>
  * </ul>
@@ -115,14 +116,9 @@ public class MfaFilter implements Filter {
         if (scheme == AuthScheme.BASIC) {
             // Seraph has already checked the password (a wrong one is answered 401 before this filter).
             boolean sameUser = user.getUsername().equalsIgnoreCase(basicUser(req.getHeader("Authorization")));
-            if (sameUser && mfa.settings().isBasicAuthAllowedFor(user.getUsername())) {
-                return Decision.PASS;
-            }
-            if (sameUser && mfa.requirement(user) == Requirement.NONE) {
-                return Decision.PASS;
-            }
             if (sameUser) {
-                return Decision.BASIC_BLOCKED;
+                return BasicAuthRule.allows(mfa.settings(), user.getUsername(), mfa.requirement(user))
+                        ? Decision.PASS : Decision.BASIC_BLOCKED;
             }
             // a Basic header for someone else on top of a session: treat as a session request
         }
