@@ -817,11 +817,17 @@ try {
   assert(a.status === 200 && JSON.parse(a.text).name === HANNA.name,
     `a signed request with hanna's access token passes without a second step (HTTP ${a.status})`);
   a = await signed(consumer(oc.key), 'GET', '/rest/api/2/myself', { oauth_token: accessToken });
-  assert(a.status === 401, `the same request signed with another key is refused (HTTP ${a.status})`);
-  // An OAuth header Jira does not accept, sent with the unverified session's
-  // cookie: the plugin must not take the header's word for it.
-  a = await signed(consumer(oc.key), 'GET', '/rest/api/2/myself', { oauth_token: accessToken }, { Cookie: await cookieHeader(unverified) });
-  assert(a.status === 401, `a forged OAuth header on top of an unverified session is refused (HTTP ${a.status})`);
+  assert(a.status === 401, `control: Jira itself refuses the same request signed with another key (HTTP ${a.status})`);
+  // An OAuth header without nonce, timestamp and signature is no OAuth attempt
+  // for Jira: its OAuth filter passes the request on unmarked, and Seraph takes
+  // the user from the unverified session's cookie. Only the plugin stands in
+  // the way, so the header alone must not open anything.
+  a = await api('GET', '/rest/api/2/myself', null, {
+    Authorization: `OAuth oauth_consumer_key="${oc.key}", oauth_token="${accessToken}", oauth_signature_method="RSA-SHA1", oauth_version="1.0"`,
+    Cookie: await cookieHeader(unverified),
+  });
+  assert(a.status === 401 && a.text.includes('Two-step verification required'),
+    `an unsigned OAuth header on top of an unverified session gets the plugin's challenge (HTTP ${a.status})`);
   await unverified.close();
   await ctx.close();
 

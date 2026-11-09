@@ -36,10 +36,14 @@ class RequestGuardsTest {
     @Test
     void requestsJirasOAuthFilterAuthenticatedPassBeforeAnyOtherCheck() {
         // no MfaService: any check after the OAuth attribute would throw
+        // the names Jira's OAuth service provider and pats-plugin set (RequestAnnotations, TokenBasedAuthenticationFilter)
+        assertEquals("com.atlassian.oath.request-flag", MfaFilter.OAUTH_ATTRIBUTE);
+        assertEquals("access.token.request", MfaFilter.PAT_ATTRIBUTE);
         MfaFilter filter = new MfaFilter(null);
         assertEquals(MfaFilter.Decision.PASS, filter.decide(withAttribute(MfaFilter.OAUTH_ATTRIBUTE, "true"), null));
         assertEquals(MfaFilter.Decision.PASS, filter.decide(withAttribute(MfaFilter.PAT_ATTRIBUTE, Boolean.TRUE), null));
-        assertThrows(NullPointerException.class, () -> filter.decide(withAttribute("unrelated", "true"), null),
+        HttpServletRequest plain = withAttribute("unrelated", "true");
+        assertThrows(NullPointerException.class, () -> filter.decide(plain, null),
                 "without either attribute the filter goes on to the user's state");
     }
 
