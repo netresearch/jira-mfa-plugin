@@ -34,6 +34,16 @@ import java.util.Base64;
  *   check; the mere presence of an {@code Authorization: Bearer} header is not
  *   trusted, because Jira falls back to the session cookie when the token is
  *   invalid.</li>
+ *   <li>Requests authenticated by OAuth 1.0a (application links, and clients
+ *   such as the TimeTracker that book on behalf of a user) pass. The signal is
+ *   the request attribute Jira's OAuth filter sets after it has verified the
+ *   request's signature and token; like the PAT check, the
+ *   {@code Authorization: OAuth} header alone is not trusted. In the
+ *   three-legged flow the user grants the token on Jira's authorize page, which
+ *   is not an open path. Two-legged OAuth, which an administrator enables per
+ *   application link, acts without a token from the user: as the user
+ *   configured on the link, or with impersonation as any user the request
+ *   names.</li>
  *   <li>HTTP Basic requests are decided by {@link BasicAuthRule}: refused once
  *   the user has a factor or the grace period has expired, unless the user is
  *   allow-listed (password-only REST would bypass the second factor).</li>
@@ -45,6 +55,13 @@ public class MfaFilter implements Filter {
     private static final Logger LOG = LoggerFactory.getLogger(MfaFilter.class);
     /** Set by Jira's bundled pats-plugin (TokenBasedAuthenticationFilter) after a valid token. */
     static final String PAT_ATTRIBUTE = "access.token.request";
+    /**
+     * Set by Jira's bundled OAuth service provider plugin (OAuthFilter, location
+     * before-login) after a successful OAuth 1.0a authentication; the key is
+     * {@code RequestAnnotations.OAUTH_REQUEST_FLAG} of atlassian-oauth-api,
+     * spelled "oath" there.
+     */
+    static final String OAUTH_ATTRIBUTE = "com.atlassian.oath.request-flag";
 
     private final MfaService mfa;
 
@@ -123,7 +140,7 @@ public class MfaFilter implements Filter {
     enum Decision { PASS, VERIFY, ENROL, BASIC_BLOCKED, ERROR, RELOGIN }
 
     Decision decide(HttpServletRequest req, ApplicationUser user) {
-        if (req.getAttribute(PAT_ATTRIBUTE) != null) {
+        if (req.getAttribute(PAT_ATTRIBUTE) != null || req.getAttribute(OAUTH_ATTRIBUTE) != null) {
             return Decision.PASS;
         }
         if (mfa.env().isRecoveryAdmin(user) || !mfa.settings().enabled) {

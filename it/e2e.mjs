@@ -4,6 +4,7 @@
 //      JIRA_RECOVERY_PASS (recovery_admin password; changes settings and is checked itself).
 import { authenticator } from 'otplib';
 import { launch, shot, assert, basicAuth, rawGet, cookieHeader, BASE, ADMIN_USER, ADMIN_PASS } from './lib.mjs';
+import { consumer, createIncomingLink, signed, formField } from './oauth.mjs';
 
 authenticator.options = { digits: 6, step: 30, window: 0 };
 const ADMIN_PAT = process.env.JIRA_ADMIN_PAT;
@@ -17,6 +18,8 @@ const CAROL = { name: 'carol' + RUN, pass: 'Carol-Pass-' + RUN };
 const DAVE = { name: 'dave' + RUN, pass: 'Dave-Pass-' + RUN };
 const EVE = { name: 'eve' + RUN, pass: 'Eve-Pass-' + RUN };
 const GINA = { name: 'gina' + RUN, pass: 'Gina-Pass-' + RUN };
+const HANNA = { name: 'hanna' + RUN, pass: 'Hanna-Pass-' + RUN };
+let oauthLink = null;
 
 async function api(method, path, body, headers = {}) {
   const r = await fetch(BASE + path, {
@@ -780,6 +783,54 @@ try {
     'a code from carol\'s pending key does not enrol gina');
   await ctx.close();
 
+  // ---- 18. OAuth 1.0a: requests a user authorised for an application link --------------------
+  // The TimeTracker books worklogs this way: an incoming application link with
+  // an RSA consumer, a token the user granted on Jira's authorize page, and
+  // every request signed with both.
+  await createUser(HANNA);
+  const oc = consumer('mfa-e2e-' + RUN);
+  oauthLink = await createIncomingLink(adminApi, oc, 'mfa-e2e-' + RUN);
+  ctx = await browser.newContext();
+  page = await ctx.newPage();
+  await enrolTotp(page, HANNA);
+  a = await signed(oc, 'POST', '/plugins/servlet/oauth/request-token', { oauth_callback: 'oob' });
+  const requestToken = formField(a.text, 'oauth_token');
+  assert(a.status === 200 && requestToken, `the consumer gets a request token (HTTP ${a.status})`);
+  const authorizeUrl = BASE + '/plugins/servlet/oauth/authorize?oauth_token=' + encodeURIComponent(requestToken);
+  const unverified = await browser.newContext();
+  const up = await unverified.newPage();
+  await login(up, HANNA);
+  assert(up.url().includes('/mfa/verify'), 'hanna\'s second password login stops at the second step');
+  r = await up.request.get(authorizeUrl, { maxRedirects: 0, headers: { Accept: 'text/html' } });
+  assert(r.status() === 302 && (r.headers().location || '').includes('/mfa/verify'),
+    `an unverified session cannot open the OAuth authorize page (HTTP ${r.status()} ${r.headers().location || ''})`);
+  await page.goto(authorizeUrl);
+  await shot(page, 'e2e-18-oauth-authorize');
+  await Promise.all([page.waitForNavigation(), page.locator('[name=approve]').click()]);
+  await shot(page, 'e2e-18-oauth-verifier');
+  const verifier = ((await page.locator('body').innerText()).match(/verification code is '([^']+)'/) || [])[1];
+  assert(verifier, 'hanna approves the request token in her verified session and gets a verification code');
+  a = await signed(oc, 'POST', '/plugins/servlet/oauth/access-token', { oauth_token: requestToken, oauth_verifier: verifier });
+  const accessToken = formField(a.text, 'oauth_token');
+  assert(a.status === 200 && accessToken, `the consumer exchanges it for an access token (HTTP ${a.status})`);
+  a = await signed(oc, 'GET', '/rest/api/2/myself', { oauth_token: accessToken });
+  assert(a.status === 200 && JSON.parse(a.text).name === HANNA.name,
+    `a signed request with hanna's access token passes without a second step (HTTP ${a.status})`);
+  a = await signed(consumer(oc.key), 'GET', '/rest/api/2/myself', { oauth_token: accessToken });
+  assert(a.status === 401, `control: Jira itself refuses the same request signed with another key (HTTP ${a.status})`);
+  // An OAuth header without nonce, timestamp and signature is no OAuth attempt
+  // for Jira: its OAuth filter passes the request on unmarked, and Seraph takes
+  // the user from the unverified session's cookie. Only the plugin stands in
+  // the way, so the header alone must not open anything.
+  a = await api('GET', '/rest/api/2/myself', null, {
+    Authorization: `OAuth oauth_consumer_key="${oc.key}", oauth_token="${accessToken}", oauth_signature_method="RSA-SHA1", oauth_version="1.0"`,
+    Cookie: await cookieHeader(unverified),
+  });
+  assert(a.status === 401 && a.text.includes('Two-step verification required'),
+    `an unsigned OAuth header on top of an unverified session gets the plugin's challenge (HTTP ${a.status})`);
+  await unverified.close();
+  await ctx.close();
+
   // ---- 9. audit log -------------------------------------------------------------------------
   a = await adminApi('GET', '/rest/auditing/1.0/events?limit=200');
   if (a.status === 200) {
@@ -796,9 +847,10 @@ try {
   failed = true;
   console.error(e);
 } finally {
-  for (const u of [ALICE, BOB, CAROL, DAVE, EVE, GINA]) {
+  for (const u of [ALICE, BOB, CAROL, DAVE, EVE, GINA, HANNA]) {
     await adminApi('DELETE', '/rest/api/2/user?username=' + u.name);
   }
+  if (oauthLink) await adminApi('DELETE', '/rest/applinks/1.0/applicationlink/' + oauthLink);
   await browser.close();
 }
 if (failed) {
