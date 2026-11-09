@@ -40,10 +40,15 @@ export function basicAuth(user, pass) {
 // A GET with the path sent byte for byte as given (no URL parsing or
 // normalisation on the client side) and without following redirects.
 export function rawGet(rawPath, headers = {}) {
+  return rawRequest('GET', rawPath, headers);
+}
+
+// The same for any method, without a body.
+export function rawRequest(method, rawPath, headers = {}) {
   const base = new URL(BASE);
   return new Promise((resolve, reject) => {
     const req = http.request({
-      host: base.hostname, port: base.port || 80, method: 'GET', path: rawPath, headers,
+      host: base.hostname, port: base.port || 80, method, path: rawPath, headers,
     }, (res) => {
       let body = '';
       res.setEncoding('utf8');

@@ -3,7 +3,7 @@
 // Env: JIRA_BASE_URL, JIRA_ADMIN_USER/PASS, JIRA_ADMIN_PAT (admin token for setup calls),
 //      JIRA_RECOVERY_PASS (recovery_admin password; changes settings and is checked itself).
 import { authenticator } from 'otplib';
-import { launch, shot, assert, basicAuth, rawGet, cookieHeader, BASE, ADMIN_USER, ADMIN_PASS } from './lib.mjs';
+import { launch, shot, assert, basicAuth, rawGet, rawRequest, cookieHeader, BASE, ADMIN_USER, ADMIN_PASS } from './lib.mjs';
 import { consumer, createIncomingLink, signed, formField } from './oauth.mjs';
 
 authenticator.options = { digits: 6, step: 30, window: 0 };
@@ -20,6 +20,7 @@ const EVE = { name: 'eve' + RUN, pass: 'Eve-Pass-' + RUN };
 const GINA = { name: 'gina' + RUN, pass: 'Gina-Pass-' + RUN };
 const HANNA = { name: 'hanna' + RUN, pass: 'Hanna-Pass-' + RUN };
 let oauthLink = null;
+const IRIS = { name: 'iris' + RUN, pass: 'Iris-Pass-' + RUN };
 
 async function api(method, path, body, headers = {}) {
   const r = await fetch(BASE + path, {
@@ -831,6 +832,50 @@ try {
   await unverified.close();
   await ctx.close();
 
+  // ---- 19. login through the dashboard's login gadget ---------------------------------------
+  // The gadget posts the password by XHR to /rest/gadget/1.0/login and reads
+  // every HTTP error as "username and password are incorrect".
+  await createUser(IRIS);
+  ctx = await browser.newContext();
+  page = await ctx.newPage();
+  await enrolTotp(page, IRIS);
+  await ctx.close();
+  ctx = await browser.newContext();
+  page = await ctx.newPage();
+  await page.goto(BASE + '/secure/Dashboard.jspa');
+  const gadget = page.locator('#loginform');
+  await gadget.waitFor();
+  await gadget.locator('#login-form-username').fill(IRIS.name);
+  await gadget.locator('#login-form-password').fill(IRIS.pass);
+  // The gadget navigates away as soon as the answer arrives, which discards
+  // the response body in the browser; read it on the way through instead.
+  let gadgetAnswer = null;
+  await page.route('**/rest/gadget/1.0/login', async (route) => {
+    const res = await route.fetch();
+    gadgetAnswer = { status: res.status(), body: await res.text() };
+    await route.fulfill({ response: res });
+  });
+  await gadget.locator('#login').click();
+  for (let i = 0; i < 100 && !gadgetAnswer; i++) await new Promise((res) => setTimeout(res, 100));
+  assert(gadgetAnswer && gadgetAnswer.status === 200 && JSON.parse(gadgetAnswer.body).loginSucceeded === true,
+    `the login gadget's XHR reports the successful password login (HTTP ${gadgetAnswer && gadgetAnswer.status})`);
+  await page.waitForURL((u) => u.toString().includes('/mfa/verify')).catch(() => {});
+  await shot(page, 'e2e-19-gadget-login');
+  assert(page.url().includes('/mfa/verify'), `after the gadget login an enrolled user is sent to the second step (at ${page.url()})`);
+  r = await page.request.get(BASE + '/rest/api/2/myself');
+  assert(r.status() === 401 && (await r.text()).includes('Two-step verification required'),
+    `the session the gadget logged in gets the plugin's challenge on REST before the second step (HTTP ${r.status()})`);
+  // The open path counts only when the raw URI is that path too: Jersey matches
+  // the raw URI, the container's dispatch path drops the "x/..;" segments.
+  for (const raw of ['/rest/gadget/1.0/x/..;/login', '/rest/gadget/1.0/login;a/../login']) {
+    const traversal = await rawRequest('POST', raw, {
+      Cookie: await cookieHeader(ctx), Accept: 'application/json', 'X-Atlassian-Token': 'no-check',
+    });
+    assert(traversal.status === 401 && traversal.text.includes('Two-step verification required'),
+      `${raw} (normalised to the open REST path) is challenged like any other path (HTTP ${traversal.status})`);
+  }
+  await ctx.close();
+
   // ---- 9. audit log -------------------------------------------------------------------------
   a = await adminApi('GET', '/rest/auditing/1.0/events?limit=200');
   if (a.status === 200) {
@@ -847,7 +892,7 @@ try {
   failed = true;
   console.error(e);
 } finally {
-  for (const u of [ALICE, BOB, CAROL, DAVE, EVE, GINA, HANNA]) {
+  for (const u of [ALICE, BOB, CAROL, DAVE, EVE, GINA, HANNA, IRIS]) {
     await adminApi('DELETE', '/rest/api/2/user?username=' + u.name);
   }
   if (oauthLink) await adminApi('DELETE', '/rest/applinks/1.0/applicationlink/' + oauthLink);
