@@ -83,14 +83,30 @@ public final class RequestClassifier {
     }
 
     /**
-     * True for an exact open path (REST resources) when the raw request path,
-     * as {@link #relativePath} returns it, is the same path. Jersey matches the
-     * raw URI rather than the container's normalised dispatch path, so a raw
-     * {@code /rest/gadget/1.0/x/..;/login} must not count: a resource whose path
-     * template absorbs the extra segments would receive it.
+     * True for an exact open path (REST resources) when the raw request URI,
+     * without the context path, is that same path, optionally followed by one
+     * path parameter on the last segment ({@code ;jsessionid=…}) that contains
+     * no further {@code /}. Jersey matches the raw URI rather than the
+     * container's normalised dispatch path, so raw forms such as
+     * {@code /rest/gadget/1.0/x/..;/login} or {@code /rest/gadget/1.0/login;a/../login}
+     * must not count: a resource whose path template absorbs the extra segments
+     * would receive them.
      */
-    public static boolean isOpenExact(String path, String rawPath) {
-        return OPEN_EXACT.contains(path) && path.equals(rawPath);
+    public static boolean isOpenExact(String path, String requestUri, String contextPath) {
+        if (!OPEN_EXACT.contains(path) || requestUri == null) {
+            return false;
+        }
+        String raw = requestUri;
+        if (contextPath != null && !contextPath.isEmpty()) {
+            if (!raw.startsWith(contextPath)) {
+                return false;
+            }
+            raw = raw.substring(contextPath.length());
+        }
+        if (raw.equals(path)) {
+            return true;
+        }
+        return raw.startsWith(path + ";") && raw.indexOf('/', path.length()) < 0;
     }
 
     public static boolean isOpen(String path) {

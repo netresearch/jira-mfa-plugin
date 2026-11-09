@@ -167,7 +167,7 @@ public class MfaFilter implements Filter {
             return Decision.PASS;
         }
         boolean open = RequestClassifier.isOpen(path)
-                || RequestClassifier.isOpenExact(path, RequestClassifier.relativePath(req.getRequestURI(), req.getContextPath()));
+                || RequestClassifier.isOpenExact(path, req.getRequestURI(), req.getContextPath());
         if (open && !RequestClassifier.hasEncodedSeparators(req.getRequestURI())) {
             return Decision.PASS;
         }

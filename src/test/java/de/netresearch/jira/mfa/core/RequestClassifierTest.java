@@ -34,18 +34,24 @@ class RequestClassifierTest {
     @Test
     void theLoginGadgetEndpointIsOpenUnderItsExactPathOnly() {
         String login = "/rest/gadget/1.0/login";
-        assertTrue(RequestClassifier.isOpenExact(login, RequestClassifier.relativePath("/jira" + login, "/jira")));
-        assertTrue(RequestClassifier.isOpenExact(login, RequestClassifier.relativePath(login + ";jsessionid=x", "")),
+        assertTrue(RequestClassifier.isOpenExact(login, login, ""));
+        assertTrue(RequestClassifier.isOpenExact(login, "/jira" + login, "/jira"));
+        assertTrue(RequestClassifier.isOpenExact(login, login + ";jsessionid=x", ""),
                 "a path parameter on the last segment reaches the same resource");
         assertFalse(RequestClassifier.isOpen(login), "not a prefix entry: the raw path must be checked as well");
-        assertFalse(RequestClassifier.isOpenExact("/rest/gadget/1.0/login/x", "/rest/gadget/1.0/login/x"));
-        assertFalse(RequestClassifier.isOpenExact("/rest/gadget/1.0/loginX", "/rest/gadget/1.0/loginX"));
-        assertFalse(RequestClassifier.isOpenExact("/rest/gadget/1.0/filtersAndProjects", "/rest/gadget/1.0/filtersAndProjects"),
+        assertFalse(RequestClassifier.isOpenExact("/rest/gadget/1.0/login/x", "/rest/gadget/1.0/login/x", ""));
+        assertFalse(RequestClassifier.isOpenExact("/rest/gadget/1.0/loginX", "/rest/gadget/1.0/loginX", ""));
+        assertFalse(RequestClassifier.isOpenExact("/rest/gadget/1.0/filtersAndProjects", "/rest/gadget/1.0/filtersAndProjects", ""),
                 "other gadget resources");
-        assertFalse(RequestClassifier.isOpenExact(login, "/s/1/_" + login), "not behind the cache prefix");
-        assertFalse(RequestClassifier.isOpenExact(login, RequestClassifier.relativePath("/rest/gadget/1.0/x/..;/login", "")),
-                "the container normalises ..; away, Jersey matches the raw path");
-        assertFalse(RequestClassifier.isOpenExact(login, RequestClassifier.relativePath("/rest/gadget/1.0/x/../login", "")));
+        assertFalse(RequestClassifier.isOpenExact(login, "/s/1/_" + login, ""), "not behind the cache prefix");
+        assertFalse(RequestClassifier.isOpenExact(login, "/other" + login, "/jira"), "a URI outside the context path");
+        // The container normalises these to the login path; Jersey matches the raw URI.
+        assertFalse(RequestClassifier.isOpenExact(login, "/rest/gadget/1.0/x/..;/login", ""));
+        assertFalse(RequestClassifier.isOpenExact(login, "/rest/gadget/1.0/x/../login", ""));
+        assertFalse(RequestClassifier.isOpenExact(login, "/rest/gadget/1.0/login;a/../login", ""),
+                "a path parameter followed by more segments");
+        assertFalse(RequestClassifier.isOpenExact(login, "/rest/gadget/1.0/login;a/b", ""));
+        assertFalse(RequestClassifier.isOpenExact(login, "/rest/gadget/1.0;x/login", ""), "a parameter on an earlier segment");
     }
 
     @Test

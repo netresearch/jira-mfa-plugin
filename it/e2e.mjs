@@ -867,11 +867,13 @@ try {
     `the session the gadget logged in gets the plugin's challenge on REST before the second step (HTTP ${r.status()})`);
   // The open path counts only when the raw URI is that path too: Jersey matches
   // the raw URI, the container's dispatch path drops the "x/..;" segments.
-  const traversal = await rawRequest('POST', '/rest/gadget/1.0/x/..;/login', {
-    Cookie: await cookieHeader(ctx), Accept: 'application/json', 'X-Atlassian-Token': 'no-check',
-  });
-  assert(traversal.status === 401 && traversal.text.includes('Two-step verification required'),
-    `"..;" in front of the open REST path is challenged like any other path (HTTP ${traversal.status})`);
+  for (const raw of ['/rest/gadget/1.0/x/..;/login', '/rest/gadget/1.0/login;a/../login']) {
+    const traversal = await rawRequest('POST', raw, {
+      Cookie: await cookieHeader(ctx), Accept: 'application/json', 'X-Atlassian-Token': 'no-check',
+    });
+    assert(traversal.status === 401 && traversal.text.includes('Two-step verification required'),
+      `${raw} (normalised to the open REST path) is challenged like any other path (HTTP ${traversal.status})`);
+  }
   await ctx.close();
 
   // ---- 9. audit log -------------------------------------------------------------------------
