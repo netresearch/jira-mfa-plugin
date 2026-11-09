@@ -32,6 +32,15 @@ class RequestClassifierTest {
     }
 
     @Test
+    void theLoginGadgetEndpointIsOpenUnderItsExactPathOnly() {
+        assertTrue(RequestClassifier.isOpen("/rest/gadget/1.0/login"));
+        assertFalse(RequestClassifier.isOpen("/rest/gadget/1.0/login/x"));
+        assertFalse(RequestClassifier.isOpen("/rest/gadget/1.0/loginX"));
+        assertFalse(RequestClassifier.isOpen("/rest/gadget/1.0/filtersAndProjects"), "other gadget resources");
+        assertFalse(RequestClassifier.isOpen("/s/1/_/rest/gadget/1.0/login"), "not behind the cache prefix");
+    }
+
+    @Test
     void cachePrefixIsOpenOnlyForStaticTargets() {
         assertTrue(RequestClassifier.isOpen("/s/d41d8cd98f00b204e9800998ecf8427e-CDN/-1ka3d/9120003/_/download/batch/x/x.css"));
         assertTrue(RequestClassifier.isOpen("/s/abc/_/images/icons/x.png"));

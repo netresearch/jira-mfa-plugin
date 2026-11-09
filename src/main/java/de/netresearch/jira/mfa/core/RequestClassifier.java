@@ -22,6 +22,18 @@ public final class RequestClassifier {
             "/secure/Logout",
             "/login.jsp");
 
+    /**
+     * Reachable by an unverified session under exactly this path. The dashboard's
+     * login gadget posts the password here by XHR; Seraph has already logged the
+     * user in when the request arrives, and the resource answers only the login
+     * outcome (flags such as {@code loginSucceeded}, no user data). On
+     * {@code loginSucceeded} the gadget loads the start page, where the filter
+     * asks for the second step. A challenge here instead would show as "username
+     * and password are incorrect", because the gadget reads every HTTP error that way.
+     */
+    private static final List<String> OPEN_EXACT = List.of(
+            "/rest/gadget/1.0/login");
+
     /** Static resources, open directly or behind Jira's cache prefix {@code /s/<keys>/_/}. */
     private static final List<String> STATIC_PREFIXES = List.of(
             "/download/resources/",
@@ -70,6 +82,9 @@ public final class RequestClassifier {
     public static boolean isOpen(String path) {
         if (path.contains("..") || path.contains("\\")) {
             return false;
+        }
+        if (OPEN_EXACT.contains(path)) {
+            return true;
         }
         for (String p : OPEN_PREFIXES) {
             if (path.startsWith(p)) {

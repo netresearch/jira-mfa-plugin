@@ -20,6 +20,7 @@ const EVE = { name: 'eve' + RUN, pass: 'Eve-Pass-' + RUN };
 const GINA = { name: 'gina' + RUN, pass: 'Gina-Pass-' + RUN };
 const HANNA = { name: 'hanna' + RUN, pass: 'Hanna-Pass-' + RUN };
 let oauthLink = null;
+const IRIS = { name: 'iris' + RUN, pass: 'Iris-Pass-' + RUN };
 
 async function api(method, path, body, headers = {}) {
   const r = await fetch(BASE + path, {
@@ -831,6 +832,40 @@ try {
   await unverified.close();
   await ctx.close();
 
+  // ---- 19. login through the dashboard's login gadget ---------------------------------------
+  // The gadget posts the password by XHR to /rest/gadget/1.0/login and reads
+  // every HTTP error as "username and password are incorrect".
+  await createUser(IRIS);
+  ctx = await browser.newContext();
+  page = await ctx.newPage();
+  await enrolTotp(page, IRIS);
+  await ctx.close();
+  ctx = await browser.newContext();
+  page = await ctx.newPage();
+  await page.goto(BASE + '/secure/Dashboard.jspa');
+  const gadget = page.locator('#loginform');
+  await gadget.waitFor();
+  await gadget.locator('#login-form-username').fill(IRIS.name);
+  await gadget.locator('#login-form-password').fill(IRIS.pass);
+  // The gadget navigates away as soon as the answer arrives, which discards
+  // the response body in the browser; read it on the way through instead.
+  let gadgetAnswer = null;
+  await page.route('**/rest/gadget/1.0/login', async (route) => {
+    const res = await route.fetch();
+    gadgetAnswer = { status: res.status(), body: await res.text() };
+    await route.fulfill({ response: res });
+  });
+  await gadget.locator('#login').click();
+  for (let i = 0; i < 100 && !gadgetAnswer; i++) await new Promise((res) => setTimeout(res, 100));
+  assert(gadgetAnswer && gadgetAnswer.status === 200 && JSON.parse(gadgetAnswer.body).loginSucceeded === true,
+    `the login gadget's XHR reports the successful password login (HTTP ${gadgetAnswer && gadgetAnswer.status})`);
+  await page.waitForURL((u) => u.toString().includes('/mfa/verify'));
+  await shot(page, 'e2e-19-gadget-login');
+  assert(page.url().includes('/mfa/verify'), 'after the gadget login an enrolled user is sent to the second step');
+  r = await page.request.get(BASE + '/rest/api/2/myself');
+  assert(r.status() === 401, `the session the gadget logged in is still refused REST before the second step (HTTP ${r.status()})`);
+  await ctx.close();
+
   // ---- 9. audit log -------------------------------------------------------------------------
   a = await adminApi('GET', '/rest/auditing/1.0/events?limit=200');
   if (a.status === 200) {
@@ -847,7 +882,7 @@ try {
   failed = true;
   console.error(e);
 } finally {
-  for (const u of [ALICE, BOB, CAROL, DAVE, EVE, GINA, HANNA]) {
+  for (const u of [ALICE, BOB, CAROL, DAVE, EVE, GINA, HANNA, IRIS]) {
     await adminApi('DELETE', '/rest/api/2/user?username=' + u.name);
   }
   if (oauthLink) await adminApi('DELETE', '/rest/applinks/1.0/applicationlink/' + oauthLink);
