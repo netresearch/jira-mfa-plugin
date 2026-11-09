@@ -5,7 +5,9 @@ import org.junit.jupiter.api.Test;
 import javax.servlet.http.HttpServletRequest;
 import java.lang.reflect.Proxy;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RequestGuardsTest {
@@ -32,6 +34,16 @@ class RequestGuardsTest {
     }
 
     @Test
+    void requestsJirasOAuthFilterAuthenticatedPassBeforeAnyOtherCheck() {
+        // no MfaService: any check after the OAuth attribute would throw
+        MfaFilter filter = new MfaFilter(null);
+        assertEquals(MfaFilter.Decision.PASS, filter.decide(withAttribute(MfaFilter.OAUTH_ATTRIBUTE, "true"), null));
+        assertEquals(MfaFilter.Decision.PASS, filter.decide(withAttribute(MfaFilter.PAT_ATTRIBUTE, Boolean.TRUE), null));
+        assertThrows(NullPointerException.class, () -> filter.decide(withAttribute("unrelated", "true"), null),
+                "without either attribute the filter goes on to the user's state");
+    }
+
+    @Test
     void anUnwritableAnswerIsLoggedButOtherFailuresStillReachJira() {
         HttpServletRequest req = request(null);
         boolean[] ran = {false};
@@ -44,6 +56,11 @@ class RequestGuardsTest {
                 MfaServletSupport.handle(req, null, (rq, rs) -> {
                     throw new IllegalStateException("bug");
                 }), "a programming error is not swallowed");
+    }
+
+    private static HttpServletRequest withAttribute(String name, Object value) {
+        return (HttpServletRequest) Proxy.newProxyInstance(RequestGuardsTest.class.getClassLoader(), new Class<?>[]{HttpServletRequest.class},
+                (p, m, a) -> "getAttribute".equals(m.getName()) && name.equals(a[0]) ? value : null);
     }
 
     private static HttpServletRequest request(String authStatus) {
