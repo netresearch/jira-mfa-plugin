@@ -40,8 +40,10 @@ import java.util.Base64;
  *   request's signature and token; like the PAT check, the
  *   {@code Authorization: OAuth} header alone is not trusted. In the
  *   three-legged flow the user grants the token on Jira's authorize page, which
- *   is not an open path; two-legged OAuth acts without a user token, as a user
- *   an administrator configured on the application link.</li>
+ *   is not an open path. Two-legged OAuth, which an administrator enables per
+ *   application link, acts without a token from the user: as the user
+ *   configured on the link, or with impersonation as any user the request
+ *   names.</li>
  *   <li>HTTP Basic requests are decided by {@link BasicAuthRule}: refused once
  *   the user has a factor or the grace period has expired, unless the user is
  *   allow-listed (password-only REST would bypass the second factor).</li>
