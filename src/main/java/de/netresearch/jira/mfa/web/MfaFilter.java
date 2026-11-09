@@ -166,7 +166,9 @@ public class MfaFilter implements Filter {
         if (mfa.isVerified(session, user)) {
             return Decision.PASS;
         }
-        if (RequestClassifier.isOpen(path) && !RequestClassifier.hasEncodedSeparators(req.getRequestURI())) {
+        boolean open = RequestClassifier.isOpen(path)
+                || RequestClassifier.isOpenExact(path, RequestClassifier.relativePath(req.getRequestURI(), req.getContextPath()));
+        if (open && !RequestClassifier.hasEncodedSeparators(req.getRequestURI())) {
             return Decision.PASS;
         }
         if (session != null && noneCached(session, user)) {

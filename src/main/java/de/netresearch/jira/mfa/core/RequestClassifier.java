@@ -23,13 +23,16 @@ public final class RequestClassifier {
             "/login.jsp");
 
     /**
-     * Reachable by an unverified session under exactly this path. The dashboard's
-     * login gadget posts the password here by XHR; Seraph has already logged the
-     * user in when the request arrives, and the resource answers only the login
-     * outcome (flags such as {@code loginSucceeded}, no user data). On
-     * {@code loginSucceeded} the gadget loads the start page, where the filter
-     * asks for the second step. A challenge here instead would show as "username
-     * and password are incorrect", because the gadget reads every HTTP error that way.
+     * Reachable by an unverified session when both the dispatched and the raw
+     * request path are exactly this path (see {@link #isOpenExact}). The
+     * dashboard's login gadget posts the password here by XHR; Seraph has already
+     * logged the user in when the request arrives, and the resource answers the
+     * login outcome and a few public settings (flags such as
+     * {@code loginSucceeded}, the contact-administrator link; no user data). On
+     * {@code loginSucceeded} the gadget navigates to the context path, where the
+     * filter asks for the second step. A challenge here instead would show as
+     * "username and password are incorrect", because the gadget reads every HTTP
+     * error that way.
      */
     private static final List<String> OPEN_EXACT = List.of(
             "/rest/gadget/1.0/login");
@@ -79,12 +82,20 @@ public final class RequestClassifier {
         return r.contains("%2e") || r.contains("%2f") || r.contains("%5c") || r.contains("%25");
     }
 
+    /**
+     * True for an exact open path (REST resources) when the raw request path,
+     * as {@link #relativePath} returns it, is the same path. Jersey matches the
+     * raw URI rather than the container's normalised dispatch path, so a raw
+     * {@code /rest/gadget/1.0/x/..;/login} must not count: a resource whose path
+     * template absorbs the extra segments would receive it.
+     */
+    public static boolean isOpenExact(String path, String rawPath) {
+        return OPEN_EXACT.contains(path) && path.equals(rawPath);
+    }
+
     public static boolean isOpen(String path) {
         if (path.contains("..") || path.contains("\\")) {
             return false;
-        }
-        if (OPEN_EXACT.contains(path)) {
-            return true;
         }
         for (String p : OPEN_PREFIXES) {
             if (path.startsWith(p)) {
