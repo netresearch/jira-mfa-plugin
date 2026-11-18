@@ -61,7 +61,7 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 
 1. Back up the database and `$JIRA_HOME`.
 2. Start Jira with the recovery account configured, so a way in exists that never needs a second factor (see "Lockout and emergencies"), or make sure you know how to set it.
-3. Upload the jar in *Administration > Manage apps > Upload app*. Uploading must be enabled (`-Dupm.plugin.upload.enabled=true` on Jira 9.x). Alternatively use `JIRA_BASE_URL=<base URL> JIRA_PAT=<token> it/install-plugin.sh <jar>` (UPM REST API) with a personal access token of an administrator: UPM issues its upload token to a token request with `os_authType=any`, not with `os_authType=basic`. Basic authentication (`JIRA_ADMIN_USER`/`JIRA_ADMIN_PASS`) works too until that administrator has enrolled or the grace period has expired; after that the plugin refuses it.
+3. Upload the jar in *Administration > Manage apps > Upload app*. Uploading must be enabled (`-Dupm.plugin.upload.enabled=true` on Jira 9.x). Alternatively use `read -rs JIRA_PAT && export JIRA_PAT && JIRA_BASE_URL=<base URL> it/install-plugin.sh <jar>` (UPM REST API; `read -rs` keeps the token out of the shell history) with a personal access token of an administrator: UPM issues its upload token to a token request with `os_authType=any`, not with `os_authType=basic`. Basic authentication (`JIRA_ADMIN_USER`/`JIRA_ADMIN_PASS`) works too until that administrator has enrolled or the grace period has expired; after that the plugin refuses it.
 4. Open *Administration > System > Security > Two-step verification* (`/plugins/servlet/mfa/admin`) and review the settings before users log in. The plugin is **active immediately after installation** with the defaults below.
 
 ### Settings
