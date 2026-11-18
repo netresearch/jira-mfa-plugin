@@ -172,7 +172,10 @@ public class SetupServlet extends MfaServletSupport {
         }
         b.append(notice(req, m, r, key));
         boolean firstFactor = !hasTotp && passkeys.isEmpty();
-        b.append(passkeyCard(req, m, passkeys, firstFactor && newCodes.isEmpty()));
+        boolean totpRetry = !hasTotp && isTotpError(errorKey);
+        // one autofocus per page: the passkey button on a first visit, the code field after a failed code
+        b.append(passkeyCard(req, m, passkeys, firstFactor && newCodes.isEmpty() && !totpRetry,
+                mfa.remainingRecoveryCodes(key) == 0));
         b.append(hasTotp ? totpCard(req, m) : totpEnrolment(req, m, u, errorKey));
         if (hasTotp || !passkeys.isEmpty()) {
             b.append("<div class=\"card\"><h2>").append(m.html("setup.recovery.heading")).append(H2_P)
@@ -188,6 +191,10 @@ public class SetupServlet extends MfaServletSupport {
     private static final String H2_P = "</h2><p>";
     private static final String BUTTON_FORM_DIV = "</button></form></div>";
     private static final String TOTP_UNAVAILABLE = "setup.totp.unavailable";
+
+    private static boolean isTotpError(String errorKey) {
+        return "setup.totp.mismatch".equals(errorKey) || TOTP_UNAVAILABLE.equals(errorKey);
+    }
 
     private String postForm(HttpServletRequest req, String action, String cssClass) {
         return "<form method=\"post\"" + (cssClass.isEmpty() ? "" : " class=\"" + cssClass + "\"") + ">"
@@ -218,14 +225,15 @@ public class SetupServlet extends MfaServletSupport {
     }
 
     /** Passkeys first: the recommended factor. */
-    private String passkeyCard(HttpServletRequest req, Messages m, List<MfaPasskey> passkeys, boolean focusAdd) {
+    private String passkeyCard(HttpServletRequest req, Messages m, List<MfaPasskey> passkeys, boolean focusAdd,
+                               boolean codesFollow) {
         String ctx = req.getContextPath();
         StringBuilder b = new StringBuilder("<div class=\"card\" id=\"passkey-card\"><h2>");
         b.append(m.html("setup.passkey.heading")).append(" <span class=\"badge\">").append(m.html("setup.passkey.badge")).append("</span></h2>");
         if (passkeys.isEmpty()) {
             b.append("<p>").append(m.html("setup.passkey.intro")).append("</p><ol class=\"steps\"><li>")
                     .append(m.html("setup.passkey.step1")).append("</li><li>").append(m.html("setup.passkey.step2"))
-                    .append("</li><li>").append(m.html("setup.passkey.step3")).append("</li></ol>");
+                    .append(codesFollow ? "</li><li>" + m.html("setup.passkey.step3") : "").append("</li></ol>");
         } else {
             b.append("<table><thead><tr><th scope=\"col\">").append(m.html("setup.passkey.colName"))
                     .append("</th><th scope=\"col\">").append(m.html("setup.passkey.colAdded"))
@@ -246,7 +254,7 @@ public class SetupServlet extends MfaServletSupport {
         data.put("done", ctx + SERVLET + "/setup");
         data.put("csrf", mfa.csrfToken(req.getSession(true)));
         data.put("msg-unsupported", m.text("js.unsupported"));
-        data.put("msg-failed", m.text("setup.passkey.addFailed", "{0}"));
+        data.put("msg-failed", m.text("setup.passkey.addFailed"));
         data.put("default-name", m.text("setup.passkey.defaultName"));
         return b.append("<div id=\"passkey-register\"").append(Html.dataAttrs(data)).append(">")
                 .append("<label for=\"passkey-label\">").append(m.html("setup.passkey.label")).append("</label>")
@@ -265,7 +273,7 @@ public class SetupServlet extends MfaServletSupport {
 
     /** The authenticator app as the alternative, folded away unless the user is working on it. */
     private String totpEnrolment(HttpServletRequest req, Messages m, ApplicationUser u, String errorKey) {
-        boolean open = "setup.totp.mismatch".equals(errorKey) || TOTP_UNAVAILABLE.equals(errorKey);
+        boolean open = isTotpError(errorKey);
         StringBuilder b = new StringBuilder("<details class=\"card\" id=\"totp-section\"");
         b.append(open ? " open" : "").append("><summary>").append(m.html("setup.totp.summary"))
                 .append("</summary><p class=\"muted\">").append(m.html("setup.totp.slower")).append("</p>");

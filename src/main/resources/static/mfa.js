@@ -75,10 +75,6 @@
     el.hidden = false;
   }
 
-  function fill(template, detail) {
-    return (template || '{0}').replace('{0}', function () { return detail; });
-  }
-
   function supported() {
     return !!(window.PublicKeyCredential && navigator.credentials);
   }
@@ -121,14 +117,18 @@
           running = false;
           loginBtn.disabled = false;
           loginStatus.textContent = '';
-          var dismissed = e && (e.name === 'NotAllowedError' || e.name === 'AbortError');
-          // AbortError: the user opened "Other ways to sign in", which closed the prompt
-          if ((automatic && dismissed) || (e && e.name === 'AbortError')) {
+          var name = e && e.name;
+          if (name === 'AbortError') {
+            // the user opened "Other ways to sign in", which closed the prompt; the focus stays there
+            return;
+          }
+          if (automatic && name === 'NotAllowedError') {
             loginStatus.textContent = d.msgDismissed || '';
             loginBtn.focus();
-          } else {
-            showError(loginErr, fill(d.msgFailed, e.message));
+            return;
           }
+          if (window.console) console.warn('passkey sign-in failed', e);
+          showError(loginErr, e && e.message === 'locked' ? d.msgLocked : d.msgFailed);
         });
     };
 
@@ -193,7 +193,8 @@
         })
         .catch(function (e) {
           regBtn.disabled = false;
-          showError(regErr, fill(rd.msgFailed, e.message));
+          if (window.console) console.warn('passkey registration failed', e);
+          showError(regErr, rd.msgFailed);
         });
     });
   }

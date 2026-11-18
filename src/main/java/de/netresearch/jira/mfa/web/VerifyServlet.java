@@ -33,7 +33,7 @@ public class VerifyServlet extends MfaServletSupport {
             resp.sendRedirect(takeReturnUrl(req));
             return;
         }
-        render(req, resp, u, null);
+        render(req, resp, u, null, false);
     }
 
     @Override
@@ -54,10 +54,12 @@ public class VerifyServlet extends MfaServletSupport {
             return;
         }
         resp.setStatus(outcome == MfaService.VerifyOutcome.LOCKED ? 429 : HttpServletResponse.SC_UNAUTHORIZED);
-        render(req, resp, u, outcome == MfaService.VerifyOutcome.LOCKED ? null : "verify.badCode");
+        render(req, resp, u, outcome == MfaService.VerifyOutcome.LOCKED ? null : "verify.badCode",
+                "recovery".equals(req.getParameter("via")));
     }
 
-    private void render(HttpServletRequest req, HttpServletResponse resp, ApplicationUser u, String errorKey) throws IOException {
+    private void render(HttpServletRequest req, HttpServletResponse resp, ApplicationUser u, String errorKey,
+                        boolean viaRecovery) throws IOException {
         Messages m = Messages.forCurrentUser();
         Instant locked = mfa.lockedUntil(u);
         boolean hasTotp = mfa.hasTotp(u.getKey());
@@ -80,9 +82,13 @@ public class VerifyServlet extends MfaServletSupport {
                         .append(codeForm).append("</details>");
             } else {
                 // TOTP only: the code field is the main path, a recovery code goes into the same field
-                b.append("<p>").append(m.html("verify.totp.lead")).append("</p>").append(codeForm);
-                b.append("<details id=\"other-ways\"><summary>").append(m.html("verify.lostDevice")).append("</summary>")
-                        .append(codeForm(req, m, "verify.label.recovery", "recovery-code", false, false)).append("</details>");
+                // TOTP only: after a failed recovery code, that form stays open and gets the focus
+                boolean recoveryRetry = errorKey != null && viaRecovery;
+                b.append("<p>").append(m.html("verify.totp.lead")).append("</p>")
+                        .append(recoveryRetry ? codeForm(req, m, "verify.label.totp", "code", false, false) : codeForm);
+                b.append("<details id=\"other-ways\"").append(recoveryRetry ? " open" : "").append("><summary>")
+                        .append(m.html("verify.lostDevice")).append("</summary>")
+                        .append(codeForm(req, m, "verify.label.recovery", "recovery-code", recoveryRetry, recoveryRetry)).append("</details>");
             }
         }
         b.append("</div>");
@@ -109,7 +115,8 @@ public class VerifyServlet extends MfaServletSupport {
         data.put("msg-unsupported", m.text("js.unsupported"));
         data.put("msg-waiting", m.text("verify.passkey.waiting"));
         data.put("msg-dismissed", m.text("verify.passkey.dismissed"));
-        data.put("msg-failed", m.text("verify.passkey.failed", "{0}"));
+        data.put("msg-failed", m.text("verify.passkey.failed"));
+        data.put("msg-locked", m.text("verify.passkey.locked"));
         return "<div id=\"passkey-box\"" + Html.dataAttrs(data) + "><p>" + m.html("verify.passkey.lead") + "</p>"
                 + "<button type=\"button\" id=\"passkey-login\"" + (autostart ? " autofocus" : "") + ">"
                 + m.html("verify.passkey.button") + "</button>"
@@ -120,6 +127,7 @@ public class VerifyServlet extends MfaServletSupport {
     private String codeForm(HttpServletRequest req, Messages m, String labelKey, String id, boolean autofocus, boolean invalid) {
         String submit = "code".equals(id) ? "verify-submit" : id + "-submit";
         return "<form method=\"post\" autocomplete=\"off\">" + csrfField(req)
+                + ("recovery-code".equals(id) ? Html.hidden("via", "recovery") : "")
                 + "<label for=\"" + id + "\">" + m.html(labelKey) + "</label><input type=\"text\" id=\"" + id
                 + "\" name=\"code\" inputmode=\"text\" autocomplete=\"one-time-code\""
                 + (autofocus ? " autofocus" : "")

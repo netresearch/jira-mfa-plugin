@@ -160,6 +160,21 @@ public class PasskeyService {
         return AssertionRequest.fromJson(storedRequest).toCredentialsGetJson();
     }
 
+    /** The challenge of a stored request, base64url. */
+    public static String requestChallenge(String storedRequest) throws IOException {
+        return AssertionRequest.fromJson(storedRequest).getPublicKeyCredentialRequestOptions().getChallenge().getBase64Url();
+    }
+
+    /** The challenge an assertion answers, base64url, or null if the response cannot be read. */
+    public static String responseChallenge(String responseJson) {
+        try {
+            return PublicKeyCredential.parseAssertionResponseJson(responseJson).getResponse().getClientData()
+                    .getChallenge().getBase64Url();
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
     /** Verifies an assertion for {@code userKey}; returns true on success. */
     public boolean finishAssertion(String userKey, String storedRequest, String responseJson) throws IOException {
         AssertionRequest request = AssertionRequest.fromJson(storedRequest);

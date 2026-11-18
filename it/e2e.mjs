@@ -408,6 +408,26 @@ try {
   assert(inJira(page), 'the passkey prompt opens by itself and completes the login without a click');
   const after = await cdp.send('WebAuthn.getCredentials', { authenticatorId });
   assert(after.credentials[0].signCount >= 1, 'the authenticator signed (sign count advanced)');
+  // two open verify pages: the second page's request must not invalidate the first one's
+  await ctx.clearCookies();
+  await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: false });
+  await login(page, BOB);
+  assert(page.url().includes('/mfa/verify'), 'bob is on the verify page with the automatic prompt waiting');
+  await page.click('#other-ways > summary'); // closes the waiting prompt
+  await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: true });
+  const twoPages = await page.evaluate(async () => {
+    const d = document.getElementById('passkey-box').dataset;
+    const post = (url, body) => fetch(url, { method: 'POST', credentials: 'same-origin',
+      headers: { 'X-MFA-Token': d.csrf, 'Content-Type': 'application/json', Accept: 'application/json' }, body: body || '{}' })
+      .then(async (r) => ({ status: r.status, json: await r.json() }));
+    const first = await post(d.options);
+    const second = await post(d.options); // a second tab starting its own prompt
+    const cred = await navigator.credentials.get({ publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(first.json.publicKey) });
+    const finish = await post(d.finish, JSON.stringify(cred.toJSON()));
+    return { second: second.status, status: finish.status, ok: finish.json.ok === true };
+  });
+  assert(twoPages.second === 200 && twoPages.status === 200 && twoPages.ok,
+    `the first page's passkey still verifies after a second page asked for its own (HTTP ${twoPages.status})`);
   // a passkey assertion from a different authenticator fails
   await ctx.clearCookies();
   await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId });

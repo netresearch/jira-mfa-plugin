@@ -25,6 +25,15 @@ final class Messages {
         this.locale = locale == null ? Locale.ENGLISH : locale;
     }
 
+    /** Languages with their own texts; any other locale gets the English texts and is declared English. */
+    static final java.util.Set<String> LANGUAGES = java.util.Set.of("en", "de");
+
+    /** English texts, for the administration pages, which are not translated. */
+    static Messages english() {
+        I18nHelper i18n = ComponentAccessor.getI18nHelperFactory().getInstance(Locale.ENGLISH);
+        return new Messages(k -> i18n.isKeyDefined(k) ? i18n.getUnescapedText(k) : null, Locale.ENGLISH);
+    }
+
     static Messages forCurrentUser() {
         I18nHelper i18n = ComponentAccessor.getJiraAuthenticationContext().getI18nHelper();
         return new Messages(k -> i18n.isKeyDefined(k) ? i18n.getUnescapedText(k) : null, i18n.getLocale());
@@ -33,7 +42,7 @@ final class Messages {
     /** The language tag for the html lang attribute, for example "de" or "en". */
     String lang() {
         String l = locale.getLanguage();
-        return l.isEmpty() ? "en" : l;
+        return LANGUAGES.contains(l) ? l : "en";
     }
 
     /** Plain text of {@code PREFIX + key}, arguments inserted; the key itself if it is missing. */

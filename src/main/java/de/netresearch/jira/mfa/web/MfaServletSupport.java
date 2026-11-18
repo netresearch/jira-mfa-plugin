@@ -177,7 +177,8 @@ abstract class MfaServletSupport extends HttpServlet {
      * without its XSRF token.
      */
     static String header(HttpServletRequest req, ApplicationUser u, boolean backToJira) {
-        return header(req, u, backToJira, Messages.forCurrentUser());
+        // the administration pages are English, so is their bar
+        return header(req, u, backToJira, Messages.english());
     }
 
     static String header(HttpServletRequest req, ApplicationUser u, boolean backToJira, Messages m) {

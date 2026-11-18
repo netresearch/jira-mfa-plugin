@@ -69,6 +69,8 @@ class MessagesTest {
         assertEquals(Messages.PREFIX + "nope", m.text("nope"));
         assertEquals("en", m.lang());
         assertEquals("de", messages(Map.of(), Locale.GERMANY).lang());
+        // a French profile gets the English texts, so the page is declared English
+        assertEquals("en", messages(Map.of(), Locale.FRENCH).lang());
     }
 
     @Test
