@@ -45,16 +45,16 @@
     </web-resource>
 
     <web-item key="mfa-profile-link" section="system.user.options/personal" weight="100">
-        <label>Two-step verification</label>
+        <label key="de.netresearch.jira.mfa.ui.title"/>
         <link linkId="mfa-setup-link">/plugins/servlet/mfa/setup</link>
     </web-item>
     <web-item key="mfa-admin-link" section="system.admin/security" weight="200">
-        <label>Two-step verification</label>
+        <label key="de.netresearch.jira.mfa.ui.title"/>
         <link linkId="mfa-admin-link">/plugins/servlet/mfa/admin</link>
     </web-item>
     <!-- User management, next to Users and Groups -->
     <web-item key="mfa-admin-users-link" section="admin_users_menu/users_groups_section" weight="200">
-        <label>Two-step verification</label>
+        <label key="de.netresearch.jira.mfa.ui.title"/>
         <link linkId="mfa-admin-users-link">/plugins/servlet/mfa/admin/users</link>
     </web-item>
 </atlassian-plugin>

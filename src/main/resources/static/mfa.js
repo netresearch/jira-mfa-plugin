@@ -75,55 +75,114 @@
     el.hidden = false;
   }
 
-  function unsupported(errEl) {
-    if (!window.PublicKeyCredential || !navigator.credentials) {
-      showError(errEl, 'This browser does not support passkeys.');
-      return true;
-    }
-    return false;
+  function fill(template, detail) {
+    return (template || '{0}').replace('{0}', detail);
   }
 
+  function supported() {
+    return !!(window.PublicKeyCredential && navigator.credentials);
+  }
+
+  // Second step: the passkey prompt opens by itself once the page has focus. A cancelled or
+  // refused automatic prompt is not an error (an attempt counts only when an assertion is sent),
+  // so it leaves a quiet hint and the button; an explicit click reports every failure.
   var login = document.getElementById('passkey-box');
   if (login) {
     var loginBtn = document.getElementById('passkey-login');
     var loginErr = login.querySelector('#passkey-error');
-    loginBtn.addEventListener('click', function () {
+    var loginStatus = login.querySelector('#passkey-status');
+    var d = login.dataset;
+    var running = false;
+    var pending = null;
+
+    var start = function (automatic) {
+      if (running) return;
       loginErr.hidden = true;
-      if (unsupported(loginErr)) return;
+      loginStatus.textContent = '';
+      if (!supported()) {
+        if (!automatic) showError(loginErr, d.msgUnsupported);
+        return;
+      }
+      running = true;
       loginBtn.disabled = true;
-      var d = login.dataset;
+      loginStatus.textContent = d.msgWaiting || '';
+      var ctrl = window.AbortController ? new AbortController() : null;
+      pending = ctrl;
       post(d.options, d.csrf)
-        .then(function (opts) { return navigator.credentials.get({ publicKey: requestOptions(opts.publicKey) }); })
+        .then(function (opts) {
+          var req = { publicKey: requestOptions(opts.publicKey) };
+          if (ctrl) req.signal = ctrl.signal;
+          return navigator.credentials.get(req);
+        })
         .then(function (cred) { return post(d.finish, d.csrf, JSON.stringify(credentialJson(cred))); })
         .then(function (res) { window.location.assign(res.redirect); })
         .catch(function (e) {
+          pending = null;
+          running = false;
           loginBtn.disabled = false;
-          showError(loginErr, 'The passkey was not accepted (' + e.message + '). Try again or enter a code.');
+          loginStatus.textContent = '';
+          var dismissed = e && (e.name === 'NotAllowedError' || e.name === 'AbortError');
+          if (automatic && dismissed) {
+            loginStatus.textContent = d.msgDismissed || '';
+            loginBtn.focus();
+          } else {
+            showError(loginErr, fill(d.msgFailed, e.message));
+          }
         });
-    });
+    };
+
+    loginBtn.addEventListener('click', function () { start(false); });
+    // Choosing another way closes an open passkey prompt.
+    var other = document.getElementById('other-ways');
+    if (other) {
+      other.addEventListener('toggle', function () {
+        if (other.open && pending) pending.abort();
+      });
+    }
+    if (d.autostart === 'true' && supported()) {
+      // Browsers refuse a WebAuthn request from a page without focus, so wait for it.
+      if (document.hasFocus()) {
+        start(true);
+      } else {
+        window.addEventListener('focus', function once() {
+          window.removeEventListener('focus', once);
+          start(true);
+        });
+      }
+    }
   }
 
+  // Enrolment: a passkey is the recommended factor; without WebAuthn the authenticator app is
+  // the way, so its section opens.
   var reg = document.getElementById('passkey-register');
   if (reg) {
     var regBtn = document.getElementById('passkey-add');
     var regErr = reg.querySelector('#passkey-error');
+    var rd = reg.dataset;
+    if (!supported()) {
+      showError(regErr, rd.msgUnsupported);
+      var totp = document.getElementById('totp-section');
+      if (totp) totp.open = true;
+    }
     regBtn.addEventListener('click', function () {
       regErr.hidden = true;
-      if (unsupported(regErr)) return;
+      if (!supported()) {
+        showError(regErr, rd.msgUnsupported);
+        return;
+      }
       regBtn.disabled = true;
-      var d = reg.dataset;
-      var label = document.getElementById('passkey-label').value || 'Passkey';
-      post(d.options, d.csrf)
+      var label = document.getElementById('passkey-label').value || rd.defaultName || 'Passkey';
+      post(rd.options, rd.csrf)
         .then(function (opts) { return navigator.credentials.create({ publicKey: creationOptions(opts.publicKey) }); })
         .then(function (cred) {
-          return post(d.finish, d.csrf, JSON.stringify(credentialJson(cred)), { 'X-MFA-Label': encodeURIComponent(label) });
+          return post(rd.finish, rd.csrf, JSON.stringify(credentialJson(cred)), { 'X-MFA-Label': encodeURIComponent(label) });
         })
         .then(function () {
           // show the result (and first recovery codes) through a normal form post
           var f = document.createElement('form');
           f.method = 'post';
-          f.action = d.done;
-          [['csrf', d.csrf], ['action', 'passkey-registered']].forEach(function (p) {
+          f.action = rd.done;
+          [['csrf', rd.csrf], ['action', 'passkey-registered']].forEach(function (p) {
             var i = document.createElement('input');
             i.type = 'hidden'; i.name = p[0]; i.value = p[1];
             f.appendChild(i);
@@ -133,7 +192,7 @@
         })
         .catch(function (e) {
           regBtn.disabled = false;
-          showError(regErr, 'The passkey could not be added (' + e.message + ').');
+          showError(regErr, fill(rd.msgFailed, e.message));
         });
     });
   }

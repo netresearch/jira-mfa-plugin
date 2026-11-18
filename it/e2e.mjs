@@ -21,6 +21,7 @@ const GINA = { name: 'gina' + RUN, pass: 'Gina-Pass-' + RUN };
 const HANNA = { name: 'hanna' + RUN, pass: 'Hanna-Pass-' + RUN };
 let oauthLink = null;
 const IRIS = { name: 'iris' + RUN, pass: 'Iris-Pass-' + RUN };
+const FRIDA = { name: 'frida' + RUN, pass: 'Frida-Pass-' + RUN };
 
 async function api(method, path, body, headers = {}) {
   const r = await fetch(BASE + path, {
@@ -107,11 +108,28 @@ async function adminReset(username) {
   });
 }
 
+// The authenticator app is folded away behind a summary on the setup page.
+async function openTotp(page) {
+  const d = page.locator('#totp-section');
+  if (await d.count() && !(await d.evaluate((e) => e.open))) await page.click('#totp-section > summary');
+}
+
+// With a passkey, the code field sits behind "Other ways to sign in".
+async function openOtherWays(page) {
+  const d = page.locator('#passkey-box ~ #other-ways');
+  if (await d.count() && !(await d.evaluate((e) => e.open))) {
+    // a pending passkey prompt is modal; wait until it has been answered
+    await page.locator('#passkey-login:enabled').waitFor({ timeout: 30000 });
+    await page.click('#other-ways > summary');
+  }
+}
+
 // Enrols TOTP for a user who has no factor; the page stays on the setup page
 // with a verified session. Returns the secret.
 async function enrolTotp(page, u) {
   await login(page, u);
   if (!page.url().includes('/mfa/setup')) await page.goto(BASE + '/plugins/servlet/mfa/setup');
+  await openTotp(page);
   const s = (await page.locator('#totp-secret').innerText()).trim();
   await page.fill('#totp-code', await nextFreshCode(s));
   await Promise.all([page.waitForNavigation(), page.click('#totp-confirm')]);
@@ -124,6 +142,7 @@ async function enrolTotp(page, u) {
 // it did not redirect).
 async function verifyTotp(page, s) {
   if (!page.url().includes('/mfa/verify')) await page.goto(BASE + '/plugins/servlet/mfa/verify');
+  await openOtherWays(page);
   await page.fill('#code', await nextFreshCode(s));
   const [nav] = await Promise.all([page.waitForNavigation(), page.click('#verify-submit')]);
   // walk the redirect chain back to the POST; Jira may redirect the target again
@@ -160,6 +179,7 @@ try {
 
   // ---- 2. TOTP enrolment ------------------------------------------------------
   await page.goto(BASE + '/plugins/servlet/mfa/setup');
+  await openTotp(page);
   const secret = (await page.locator('#totp-secret').innerText()).trim();
   assert(/^[A-Z2-7]{32}$/.test(secret), 'base32 TOTP secret is displayed for manual entry');
   assert(await page.locator('svg[role=img]').count() === 1, 'QR code is rendered');
@@ -377,10 +397,15 @@ try {
   await shot(page, 'e2e-08-passkey');
   // log out, keep the authenticator (same page/target), log in again
   await ctx.clearCookies();
+  const bobPages = [];
+  const onNav = (f) => { if (f === page.mainFrame()) bobPages.push(f.url()); };
+  page.on('framenavigated', onNav);
   await login(page, BOB);
-  assert(page.url().includes('/plugins/servlet/mfa/verify'), 'bob is asked for the second step');
-  await Promise.all([page.waitForURL((u) => !u.toString().includes('/mfa/verify')), page.click('#passkey-login')]);
-  assert(inJira(page), 'the passkey completes the login');
+  // the verify page opens the passkey prompt by itself; the virtual authenticator answers it
+  await page.waitForURL((u) => !u.toString().includes('/mfa/verify'), { timeout: 30000 });
+  page.off('framenavigated', onNav);
+  assert(bobPages.some((u) => u.includes('/mfa/verify')), 'bob is asked for the second step');
+  assert(inJira(page), 'the passkey prompt opens by itself and completes the login without a click');
   const after = await cdp.send('WebAuthn.getCredentials', { authenticatorId });
   assert(after.credentials[0].signCount >= 1, 'the authenticator signed (sign count advanced)');
   // a passkey assertion from a different authenticator fails
@@ -390,6 +415,15 @@ try {
     options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
   });
   await login(page, BOB);
+  // the automatic prompt fails quietly: a hint, no error, the button ready again
+  await page.locator('#passkey-status').filter({ hasText: /closed/ }).waitFor({ timeout: 30000 });
+  assert(await page.locator('#passkey-error').isHidden() && await page.locator('#passkey-login').isEnabled(),
+    'a refused automatic passkey prompt shows a hint and no error');
+  assert(!(await page.locator('#code').isVisible()) && await page.locator('#other-ways > summary').isVisible(),
+    'the recovery code field is folded away behind "Lost your passkey?"');
+  await shot(page, 'e2e-08-verify-passkey');
+  await page.click('#other-ways > summary');
+  assert(await page.locator('#code').isVisible(), 'opening "Lost your passkey?" shows the recovery code field');
   await page.click('#passkey-login');
   await page.locator('#passkey-error').waitFor({ state: 'visible', timeout: 30000 });
   assert(page.url().includes('/mfa/verify'), 'an unknown authenticator does not complete the login');
@@ -403,6 +437,7 @@ try {
   ctx = await browser.newContext();
   page = await ctx.newPage();
   await login(page, BOSS);
+  await openTotp(page);
   const bossSecret = (await page.locator('#totp-secret').innerText()).trim();
   await page.fill('#totp-code', await nextFreshCode(bossSecret));
   await Promise.all([page.waitForNavigation(), page.click('#totp-confirm')]);
@@ -572,6 +607,13 @@ try {
   assert(await pageA.getByText('Second key').count() >= 1, 'dave adds a passkey as second factor');
   const ctxB = await browser.newContext();
   const pageB = await ctxB.newPage();
+  // session B's browser holds no passkey of dave's: the automatic prompt ends at once, as when a
+  // user cancels it, and the code field behind "Other ways to sign in" is used
+  const cdpB = await ctxB.newCDPSession(pageB);
+  await cdpB.send('WebAuthn.enable');
+  await cdpB.send('WebAuthn.addVirtualAuthenticator', {
+    options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
+  });
   await login(pageB, DAVE);
   assert(pageB.url().includes('/mfa/verify'), 'dave is asked for the second step in a second browser');
   await verifyTotp(pageB, daveSecret);
@@ -746,6 +788,7 @@ try {
   page = await ctx.newPage();
   await login(page, CAROL);
   assert(page.url().includes('/mfa/setup'), 'carol (no factor) lands on enrolment');
+  await openTotp(page);
   const carolKey = (await page.locator('#totp-secret').innerText()).trim();
   const carolCsrf = await page.locator('input[name=csrf]').first().inputValue();
   const jsessionOf = async (c) => ((await c.cookies(BASE)).find((k) => k.name === 'JSESSIONID') || {}).value;
@@ -767,6 +810,7 @@ try {
   const who = r.status() === 200 ? (await r.json()).name : null;
   assert(who === GINA.name, `logging in as gina over carol's session in the same browser switches the user (myself: ${who}, HTTP ${r.status()})`);
   if (!page.url().includes('/mfa/setup')) await page.goto(BASE + '/plugins/servlet/mfa/setup');
+  await openTotp(page);
   const ginaKey = (await page.locator('#totp-secret').innerText()).trim();
   const ginaCsrf = await page.locator('input[name=csrf]').first().inputValue();
   const ginaJsession = await jsessionOf(ctx);
@@ -877,6 +921,26 @@ try {
   await ctx.close();
 
   // ---- 9. audit log -------------------------------------------------------------------------
+  // ---- German page texts for a user whose profile language is German ---------------------
+  await createUser(FRIDA);
+  let pref = await fetch(BASE + '/rest/api/2/mypreferences?key=jira.user.locale', {
+    method: 'PUT', body: 'de_DE',
+    headers: { 'Content-Type': 'application/json', Authorization: basicAuth(FRIDA.name, FRIDA.pass) },
+  });
+  a = await api('GET', '/rest/api/2/myself', null, { Authorization: basicAuth(FRIDA.name, FRIDA.pass) });
+  assert(pref.status < 300 && a.json().locale === 'de_DE', `frida's profile language is German (HTTP ${pref.status}, ${a.json().locale})`);
+  ctx = await browser.newContext();
+  page = await ctx.newPage();
+  await login(page, FRIDA);
+  assert(page.url().includes('/plugins/servlet/mfa/setup'), 'frida lands on enrolment');
+  assert(await page.getAttribute('html', 'lang') === 'de', 'the setup page declares German');
+  assert(await page.locator('h1').innerText() === 'Best\u00e4tigung in zwei Schritten', 'the heading is German, umlaut intact');
+  assert((await page.locator('#passkey-add').innerText()).trim() === 'Passkey hinzuf\u00fcgen'
+    && await page.getByText('Empfohlen').count() === 1, 'the passkey is offered first and marked as recommended, in German');
+  assert(await page.locator('#totp-section').evaluate((e) => !e.open), 'the authenticator app is folded away as the alternative');
+  await shot(page, 'e2e-20-setup-de');
+  await ctx.close();
+
   a = await adminApi('GET', '/rest/auditing/1.0/events?limit=200');
   if (a.status === 200) {
     const actions = a.json().entities.map((e) => e.type && e.type.actionI18nKey).filter(Boolean);
@@ -892,7 +956,7 @@ try {
   failed = true;
   console.error(e);
 } finally {
-  for (const u of [ALICE, BOB, CAROL, DAVE, EVE, GINA, HANNA, IRIS]) {
+  for (const u of [ALICE, BOB, CAROL, DAVE, EVE, GINA, HANNA, IRIS, FRIDA]) {
     await adminApi('DELETE', '/rest/api/2/user?username=' + u.name);
   }
   if (oauthLink) await adminApi('DELETE', '/rest/applinks/1.0/applicationlink/' + oauthLink);
