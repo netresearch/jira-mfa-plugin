@@ -3,11 +3,11 @@
 # until the plugin reports enabled in the jar's version. An update over an
 # installed version otherwise reads the old plugin, still enabled, as done.
 # Usage: it/install-plugin.sh <jar>
-# Auth: JIRA_ADMIN_USER / JIRA_ADMIN_PASS (Basic). UPM did not issue its upload
-#       token to a personal access token in the test, so JIRA_PAT works only for
-#       the status check. Once the plugin is active it refuses Basic for enforced
-#       administrators: use recovery_admin (recovery mode) or an administrator on
-#       the plugin's Basic allow-list.
+# Auth: JIRA_PAT (personal access token of an administrator), or
+#       JIRA_ADMIN_USER / JIRA_ADMIN_PASS (Basic). UPM issues its upload token to
+#       a personal access token only on a request with os_authType=any (with
+#       os_authType=basic it does not). Once the plugin is active it refuses Basic
+#       for enforced administrators, so use JIRA_PAT there.
 set -euo pipefail
 jar="$1"
 base="${JIRA_BASE_URL:-http://localhost:18080}"
@@ -24,7 +24,7 @@ else
 fi
 hdr="$(mktemp)"
 trap 'rm -f "$hdr"' EXIT
-curl -sS -o /dev/null -D "$hdr" "${auth[@]}" -H 'Accept: application/vnd.atl.plugins.installed+json' "$base/rest/plugins/1.0/?os_authType=basic"
+curl -sS -o /dev/null -D "$hdr" "${auth[@]}" -H 'Accept: application/vnd.atl.plugins.installed+json' "$base/rest/plugins/1.0/?os_authType=any"
 token="$(awk 'tolower($1)=="upm-token:" {print $2}' "$hdr" | tr -d '\r')"
 if [[ -z "$token" ]]; then
   echo "no UPM token received" >&2
@@ -37,7 +37,9 @@ if [[ "$code" != 202 ]]; then
   exit 1
 fi
 for _ in $(seq 1 60); do
-  state="$(curl -sS "${auth[@]}" "$base/rest/plugins/1.0/${key}-key" | jq -r '"\(.enabled) \(.version)"' 2>/dev/null || true)"
+  # the plugin list, not .../<key>-key: that one answers a personal access token with an empty body
+  state="$(curl -sS "${auth[@]}" -H 'Accept: application/vnd.atl.plugins.installed+json' "$base/rest/plugins/1.0/" \
+    | jq -r --arg k "$key" '.plugins[] | select(.key == $k) | "\(.enabled) \(.version)"' 2>/dev/null || true)"
   if [[ "$state" == "true $want" ]]; then
     echo "installed and enabled: $state"
     exit 0
