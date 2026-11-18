@@ -76,7 +76,7 @@
   }
 
   function fill(template, detail) {
-    return (template || '{0}').replace('{0}', detail);
+    return (template || '{0}').replace('{0}', function () { return detail; });
   }
 
   function supported() {
@@ -122,7 +122,8 @@
           loginBtn.disabled = false;
           loginStatus.textContent = '';
           var dismissed = e && (e.name === 'NotAllowedError' || e.name === 'AbortError');
-          if (automatic && dismissed) {
+          // AbortError: the user opened "Other ways to sign in", which closed the prompt
+          if ((automatic && dismissed) || (e && e.name === 'AbortError')) {
             loginStatus.textContent = d.msgDismissed || '';
             loginBtn.focus();
           } else {

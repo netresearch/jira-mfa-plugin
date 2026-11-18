@@ -91,7 +91,7 @@ public class SetupServlet extends MfaServletSupport {
                 unavailable = true;
             }
             if (unavailable) {
-                error = "setup.totp.unavailable";
+                error = TOTP_UNAVAILABLE;
             } else if (confirmed) {
                 message = "setup.totp.added";
                 newCodes = afterFirstFactor(req, u, hadFactor);
@@ -155,7 +155,6 @@ public class SetupServlet extends MfaServletSupport {
     private void render(HttpServletRequest req, HttpServletResponse resp, ApplicationUser u, Requirement r,
                         String errorKey, String messageKey, List<String> newCodes) throws IOException {
         Messages m = Messages.forCurrentUser();
-        String ctx = req.getContextPath();
         HttpSession session = req.getSession(true);
         String key = u.getKey();
         boolean hasTotp = mfa.hasTotp(key);
@@ -169,28 +168,60 @@ public class SetupServlet extends MfaServletSupport {
             b.append("<p class=\"ok\" role=\"status\">").append(m.html(messageKey)).append("</p>");
         }
         if (!newCodes.isEmpty()) {
-            b.append("<div class=\"card\" id=\"recovery-codes\"><h2>").append(m.html("setup.codes.heading")).append("</h2><p>")
-                    .append(m.html("setup.codes.intro")).append("</p><ul class=\"codes\">");
-            for (String c : newCodes) {
-                b.append("<li><code>").append(Html.esc(c)).append("</code></li>");
-            }
-            b.append("</ul><p><a href=\"").append(Html.esc(ctx)).append("/secure/Dashboard.jspa\">")
-                    .append(m.html("setup.codes.continue")).append("</a></p></div>");
+            b.append(newCodesCard(req, m, newCodes));
         }
-        if (r == Requirement.ENROL_REQUIRED) {
-            b.append("<div class=\"notice\" role=\"alert\">").append(m.html("setup.required")).append("</div>");
-        } else if (r == Requirement.ENROL_OPTIONAL) {
-            String end = mfa.graceEndIfStarted(key).map(DATE::format).orElse(m.text("setup.optional.graceEnd"));
-            b.append("<div class=\"notice\">").append(m.htmlWith("setup.optional", "<strong>" + Html.esc(end) + "</strong>"))
-                    .append("<form method=\"post\" class=\"inline\">").append(csrfField(req)).append(Html.hidden("action", "later"))
-                    .append(" <button type=\"submit\" class=\"secondary\" id=\"later\">").append(m.html("setup.later"))
-                    .append("</button></form></div>");
-        }
-
-        // Passkeys first: the recommended factor
+        b.append(notice(req, m, r, key));
         boolean firstFactor = !hasTotp && passkeys.isEmpty();
-        b.append("<div class=\"card\" id=\"passkey-card\"><h2>").append(m.html("setup.passkey.heading"))
-                .append(" <span class=\"badge\">").append(m.html("setup.passkey.badge")).append("</span></h2>");
+        b.append(passkeyCard(req, m, passkeys, firstFactor && newCodes.isEmpty()));
+        b.append(hasTotp ? totpCard(req, m) : totpEnrolment(req, m, u, errorKey));
+        if (hasTotp || !passkeys.isEmpty()) {
+            b.append("<div class=\"card\"><h2>").append(m.html("setup.recovery.heading")).append(H2_P)
+                    .append(m.html("setup.recovery.left", mfa.remainingRecoveryCodes(key))).append("</p>")
+                    .append(postForm(req, "recovery-regenerate", ""))
+                    .append("<button type=\"submit\" class=\"secondary\" id=\"recovery-regenerate\">")
+                    .append(m.html("setup.recovery.regenerate")).append(BUTTON_FORM_DIV);
+        }
+        Html.page(resp, m.lang(), m.text("title"), header(req, u, mfa.isVerified(session, u) || r == Requirement.NONE, m),
+                b.toString(), scriptUrl(req));
+    }
+
+    private static final String H2_P = "</h2><p>";
+    private static final String BUTTON_FORM_DIV = "</button></form></div>";
+    private static final String TOTP_UNAVAILABLE = "setup.totp.unavailable";
+
+    private String postForm(HttpServletRequest req, String action, String cssClass) {
+        return "<form method=\"post\"" + (cssClass.isEmpty() ? "" : " class=\"" + cssClass + "\"") + ">"
+                + csrfField(req) + Html.hidden("action", action);
+    }
+
+    private static String newCodesCard(HttpServletRequest req, Messages m, List<String> newCodes) {
+        StringBuilder b = new StringBuilder("<div class=\"card\" id=\"recovery-codes\"><h2>");
+        b.append(m.html("setup.codes.heading")).append(H2_P).append(m.html("setup.codes.intro")).append("</p><ul class=\"codes\">");
+        for (String c : newCodes) {
+            b.append("<li><code>").append(Html.esc(c)).append("</code></li>");
+        }
+        return b.append("</ul><p><a href=\"").append(Html.esc(req.getContextPath())).append("/secure/Dashboard.jspa\">")
+                .append(m.html("setup.codes.continue")).append("</a></p></div>").toString();
+    }
+
+    private String notice(HttpServletRequest req, Messages m, Requirement r, String key) {
+        if (r == Requirement.ENROL_REQUIRED) {
+            return "<div class=\"notice\" role=\"alert\">" + m.html("setup.required") + "</div>";
+        }
+        if (r != Requirement.ENROL_OPTIONAL) {
+            return "";
+        }
+        String end = mfa.graceEndIfStarted(key).map(DATE::format).orElse(m.text("setup.optional.graceEnd"));
+        return "<div class=\"notice\">" + m.htmlWith("setup.optional", "<strong>" + Html.esc(end) + "</strong>")
+                + postForm(req, "later", "inline")
+                + " <button type=\"submit\" class=\"secondary\" id=\"later\">" + m.html("setup.later") + BUTTON_FORM_DIV;
+    }
+
+    /** Passkeys first: the recommended factor. */
+    private String passkeyCard(HttpServletRequest req, Messages m, List<MfaPasskey> passkeys, boolean focusAdd) {
+        String ctx = req.getContextPath();
+        StringBuilder b = new StringBuilder("<div class=\"card\" id=\"passkey-card\"><h2>");
+        b.append(m.html("setup.passkey.heading")).append(" <span class=\"badge\">").append(m.html("setup.passkey.badge")).append("</span></h2>");
         if (passkeys.isEmpty()) {
             b.append("<p>").append(m.html("setup.passkey.intro")).append("</p><ol class=\"steps\"><li>")
                     .append(m.html("setup.passkey.step1")).append("</li><li>").append(m.html("setup.passkey.step2"))
@@ -203,8 +234,7 @@ public class SetupServlet extends MfaServletSupport {
             for (MfaPasskey p : passkeys) {
                 b.append("<tr><td>").append(Html.esc(p.getLabel())).append("</td><td>")
                         .append(DATE.format(Instant.ofEpochMilli(p.getCreated()))).append("</td><td>")
-                        .append("<form method=\"post\" class=\"inline\">").append(csrfField(req))
-                        .append(Html.hidden("action", "passkey-remove")).append(Html.hidden("id", Integer.toString(p.getID())))
+                        .append(postForm(req, "passkey-remove", "inline")).append(Html.hidden("id", Integer.toString(p.getID())))
                         .append("<button type=\"submit\" class=\"secondary\" aria-label=\"").append(m.html("setup.passkey.removeLabel", p.getLabel()))
                         .append("\">").append(m.html("setup.passkey.remove")).append("</button></form></td></tr>");
             }
@@ -214,62 +244,53 @@ public class SetupServlet extends MfaServletSupport {
         data.put("options", ctx + SERVLET + "/webauthn/register/options");
         data.put("finish", ctx + SERVLET + "/webauthn/register/finish");
         data.put("done", ctx + SERVLET + "/setup");
-        data.put("csrf", mfa.csrfToken(session));
+        data.put("csrf", mfa.csrfToken(req.getSession(true)));
         data.put("msg-unsupported", m.text("js.unsupported"));
         data.put("msg-failed", m.text("setup.passkey.addFailed", "{0}"));
         data.put("default-name", m.text("setup.passkey.defaultName"));
-        b.append("<div id=\"passkey-register\"").append(Html.dataAttrs(data)).append(">")
+        return b.append("<div id=\"passkey-register\"").append(Html.dataAttrs(data)).append(">")
                 .append("<label for=\"passkey-label\">").append(m.html("setup.passkey.label")).append("</label>")
                 .append("<input type=\"text\" id=\"passkey-label\" maxlength=\"60\" value=\"")
                 .append(m.html("setup.passkey.defaultName")).append("\">")
-                .append("<button type=\"button\" id=\"passkey-add\"").append(firstFactor && newCodes.isEmpty() ? " autofocus" : "").append(">")
+                .append("<button type=\"button\" id=\"passkey-add\"").append(focusAdd ? " autofocus" : "").append(">")
                 .append(m.html("setup.passkey.add")).append("</button>")
-                .append("<p class=\"error\" role=\"alert\" id=\"passkey-error\" hidden></p></div></div>");
+                .append("<p class=\"error\" role=\"alert\" id=\"passkey-error\" hidden></p></div></div>").toString();
+    }
 
-        // Authenticator app: an alternative, folded away unless it is set up or the user is working on it
-        if (hasTotp) {
-            b.append("<div class=\"card\" id=\"totp-card\"><h2>").append(m.html("setup.totp.heading")).append("</h2><p>")
-                    .append(m.html("setup.totp.present")).append("</p><form method=\"post\">").append(csrfField(req))
-                    .append(Html.hidden("action", "totp-remove")).append("<button type=\"submit\" class=\"secondary\">")
-                    .append(m.html("setup.totp.remove")).append("</button></form></div>");
-        } else {
-            boolean open = "setup.totp.mismatch".equals(errorKey) || "setup.totp.unavailable".equals(errorKey);
-            b.append("<details class=\"card\" id=\"totp-section\"").append(open ? " open" : "").append("><summary>")
-                    .append(m.html("setup.totp.summary")).append("</summary><p class=\"muted\">").append(m.html("setup.totp.slower")).append("</p>");
-            byte[] secret;
-            try {
-                secret = mfa.pendingTotpSecret(session, u.getKey());
-            } catch (RuntimeException e) {
-                // key file problem: keep passkeys and "later" usable instead of failing the whole page
-                LOG.error("cannot offer TOTP enrolment to {}", u.getUsername(), e);
-                secret = null;
-            }
-            if (secret == null) {
-                b.append("<p class=\"error\" role=\"alert\" id=\"totp-unavailable\">").append(m.html("setup.totp.unavailable")).append("</p>");
-            } else {
-                String uri = Totp.otpauthUri(mfa.settings().issuer, u.getUsername(), secret);
-                b.append("<p>").append(m.html("setup.totp.scan")).append("</p>")
-                        .append("<div class=\"qr\">").append(Html.qrSvg(uri, m.text("setup.totp.qrLabel"))).append("</div>")
-                        .append("<p class=\"muted\">").append(m.htmlWith("setup.totp.manual",
-                                "<code id=\"totp-secret\">" + Html.esc(Totp.base32(secret)) + "</code>")).append("</p>")
-                        .append("<form method=\"post\" autocomplete=\"off\">").append(csrfField(req)).append(Html.hidden("action", "totp-confirm"))
-                        .append("<label for=\"totp-code\">").append(m.html("setup.totp.codeLabel"))
-                        .append("</label><input type=\"text\" id=\"totp-code\" name=\"code\" inputmode=\"numeric\" autocomplete=\"one-time-code\" pattern=\"[0-9 ]{6,7}\" required")
-                        .append(open ? " autofocus" : "").append(">")
-                        .append("<button type=\"submit\" id=\"totp-confirm\">").append(m.html("setup.totp.add")).append("</button></form>");
-            }
-            b.append("</details>");
-        }
+    private String totpCard(HttpServletRequest req, Messages m) {
+        return "<div class=\"card\" id=\"totp-card\"><h2>" + m.html("setup.totp.heading") + H2_P
+                + m.html("setup.totp.present") + "</p>" + postForm(req, "totp-remove", "")
+                + "<button type=\"submit\" class=\"secondary\">" + m.html("setup.totp.remove") + BUTTON_FORM_DIV;
+    }
 
-        // Recovery codes
-        if (hasTotp || !passkeys.isEmpty()) {
-            b.append("<div class=\"card\"><h2>").append(m.html("setup.recovery.heading")).append("</h2><p>")
-                    .append(m.html("setup.recovery.left", mfa.remainingRecoveryCodes(key))).append("</p>")
-                    .append("<form method=\"post\">").append(csrfField(req)).append(Html.hidden("action", "recovery-regenerate"))
-                    .append("<button type=\"submit\" class=\"secondary\" id=\"recovery-regenerate\">")
-                    .append(m.html("setup.recovery.regenerate")).append("</button></form></div>");
+    /** The authenticator app as the alternative, folded away unless the user is working on it. */
+    private String totpEnrolment(HttpServletRequest req, Messages m, ApplicationUser u, String errorKey) {
+        boolean open = "setup.totp.mismatch".equals(errorKey) || TOTP_UNAVAILABLE.equals(errorKey);
+        StringBuilder b = new StringBuilder("<details class=\"card\" id=\"totp-section\"");
+        b.append(open ? " open" : "").append("><summary>").append(m.html("setup.totp.summary"))
+                .append("</summary><p class=\"muted\">").append(m.html("setup.totp.slower")).append("</p>");
+        byte[] secret;
+        try {
+            secret = mfa.pendingTotpSecret(req.getSession(true), u.getKey());
+        } catch (RuntimeException e) {
+            // key file problem: keep passkeys and "later" usable instead of failing the whole page
+            LOG.error("cannot offer TOTP enrolment to {}", u.getUsername(), e);
+            secret = null;
         }
-        Html.page(resp, m.lang(), m.text("title"), header(req, u, mfa.isVerified(session, u) || r == Requirement.NONE, m),
-                b.toString(), scriptUrl(req));
+        if (secret == null) {
+            return b.append("<p class=\"error\" role=\"alert\" id=\"totp-unavailable\">").append(m.html(TOTP_UNAVAILABLE))
+                    .append("</p></details>").toString();
+        }
+        String uri = Totp.otpauthUri(mfa.settings().issuer, u.getUsername(), secret);
+        return b.append("<p>").append(m.html("setup.totp.scan")).append("</p>")
+                .append("<div class=\"qr\">").append(Html.qrSvg(uri, m.text("setup.totp.qrLabel"))).append("</div>")
+                .append("<p class=\"muted\">").append(m.htmlWith("setup.totp.manual",
+                        "<code id=\"totp-secret\">" + Html.esc(Totp.base32(secret)) + "</code>")).append("</p>")
+                .append("<form method=\"post\" autocomplete=\"off\">").append(csrfField(req)).append(Html.hidden("action", "totp-confirm"))
+                .append("<label for=\"totp-code\">").append(m.html("setup.totp.codeLabel"))
+                .append("</label><input type=\"text\" id=\"totp-code\" name=\"code\" inputmode=\"numeric\" autocomplete=\"one-time-code\" pattern=\"[0-9 ]{6,7}\" required")
+                .append(open ? " autofocus" : "").append(">")
+                .append("<button type=\"submit\" id=\"totp-confirm\">").append(m.html("setup.totp.add")).append("</button></form></details>")
+                .toString();
     }
 }

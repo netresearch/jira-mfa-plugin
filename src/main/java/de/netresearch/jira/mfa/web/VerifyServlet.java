@@ -72,26 +72,9 @@ public class VerifyServlet extends MfaServletSupport {
             if (errorKey != null) {
                 b.append("<p class=\"error\" role=\"alert\" id=\"code-error\">").append(m.html(errorKey)).append("</p>");
             }
-            String codeForm = codeForm(req, m, hasPasskey ? (hasTotp ? "verify.label.totpOrRecovery" : "verify.label.recovery")
-                    : "verify.label.totp", "code", !hasPasskey || errorKey != null, errorKey != null);
+            String codeForm = codeForm(req, m, codeLabelKey(hasPasskey, hasTotp), "code", !hasPasskey || errorKey != null, errorKey != null);
             if (hasPasskey) {
-                // The main path: the passkey prompt opens by itself (mfa.js), except after a failed code,
-                // where the user has just chosen another way.
-                Map<String, String> data = new LinkedHashMap<>();
-                data.put("options", req.getContextPath() + SERVLET + "/webauthn/authenticate/options");
-                data.put("finish", req.getContextPath() + SERVLET + "/webauthn/authenticate/finish");
-                data.put("csrf", mfa.csrfToken(req.getSession(true)));
-                data.put("autostart", errorKey == null ? "true" : "false");
-                data.put("msg-unsupported", m.text("js.unsupported"));
-                data.put("msg-waiting", m.text("verify.passkey.waiting"));
-                data.put("msg-dismissed", m.text("verify.passkey.dismissed"));
-                data.put("msg-failed", m.text("verify.passkey.failed", "{0}"));
-                b.append("<div id=\"passkey-box\"").append(Html.dataAttrs(data)).append("><p>")
-                        .append(m.html("verify.passkey.lead")).append("</p>")
-                        .append("<button type=\"button\" id=\"passkey-login\"").append(errorKey == null ? " autofocus" : "").append(">")
-                        .append(m.html("verify.passkey.button")).append("</button>")
-                        .append("<p class=\"muted\" role=\"status\" id=\"passkey-status\"></p>")
-                        .append("<p class=\"error\" role=\"alert\" id=\"passkey-error\" hidden></p></div>");
+                b.append(passkeyBox(req, m, errorKey == null));
                 b.append("<details id=\"other-ways\"").append(errorKey != null ? " open" : "").append("><summary>")
                         .append(m.html(hasTotp ? "verify.other" : "verify.lostPasskey")).append("</summary>")
                         .append(codeForm).append("</details>");
@@ -104,6 +87,34 @@ public class VerifyServlet extends MfaServletSupport {
         }
         b.append("</div>");
         Html.page(resp, m.lang(), m.text("title"), header(req, u, false, m), b.toString(), scriptUrl(req));
+    }
+
+    private static String codeLabelKey(boolean hasPasskey, boolean hasTotp) {
+        if (!hasPasskey) {
+            return "verify.label.totp";
+        }
+        return hasTotp ? "verify.label.totpOrRecovery" : "verify.label.recovery";
+    }
+
+    /**
+     * The main path for a user with a passkey: the prompt opens by itself (mfa.js), except after a
+     * failed code, where the user has just chosen another way.
+     */
+    private String passkeyBox(HttpServletRequest req, Messages m, boolean autostart) {
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("options", req.getContextPath() + SERVLET + "/webauthn/authenticate/options");
+        data.put("finish", req.getContextPath() + SERVLET + "/webauthn/authenticate/finish");
+        data.put("csrf", mfa.csrfToken(req.getSession(true)));
+        data.put("autostart", Boolean.toString(autostart));
+        data.put("msg-unsupported", m.text("js.unsupported"));
+        data.put("msg-waiting", m.text("verify.passkey.waiting"));
+        data.put("msg-dismissed", m.text("verify.passkey.dismissed"));
+        data.put("msg-failed", m.text("verify.passkey.failed", "{0}"));
+        return "<div id=\"passkey-box\"" + Html.dataAttrs(data) + "><p>" + m.html("verify.passkey.lead") + "</p>"
+                + "<button type=\"button\" id=\"passkey-login\"" + (autostart ? " autofocus" : "") + ">"
+                + m.html("verify.passkey.button") + "</button>"
+                + "<p class=\"muted\" role=\"status\" id=\"passkey-status\"></p>"
+                + "<p class=\"error\" role=\"alert\" id=\"passkey-error\" hidden></p></div>";
     }
 
     private String codeForm(HttpServletRequest req, Messages m, String labelKey, String id, boolean autofocus, boolean invalid) {

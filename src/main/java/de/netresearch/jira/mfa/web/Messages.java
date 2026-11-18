@@ -5,7 +5,7 @@ import com.atlassian.jira.util.I18nHelper;
 
 import java.text.MessageFormat;
 import java.util.Locale;
-import java.util.function.Function;
+import java.util.function.UnaryOperator;
 
 /**
  * Texts of the plugin's pages in the language of the logged-in user (Jira profile
@@ -17,12 +17,12 @@ import java.util.function.Function;
 final class Messages {
     static final String PREFIX = "de.netresearch.jira.mfa.ui.";
 
-    private final Function<String, String> templates;
+    private final UnaryOperator<String> templates;
     private final Locale locale;
 
-    Messages(Function<String, String> templates, Locale locale) {
+    Messages(UnaryOperator<String> templates, Locale locale) {
         this.templates = templates;
-        this.locale = locale;
+        this.locale = locale == null ? Locale.ENGLISH : locale;
     }
 
     static Messages forCurrentUser() {
@@ -32,7 +32,7 @@ final class Messages {
 
     /** The language tag for the html lang attribute, for example "de" or "en". */
     String lang() {
-        String l = locale == null ? "" : locale.getLanguage();
+        String l = locale.getLanguage();
         return l.isEmpty() ? "en" : l;
     }
 
@@ -42,7 +42,7 @@ final class Messages {
         if (t == null) {
             return PREFIX + key;
         }
-        return args.length == 0 ? t : new MessageFormat(t, locale == null ? Locale.ENGLISH : locale).format(args);
+        return args.length == 0 ? t : new MessageFormat(t, locale).format(args);
     }
 
     /** HTML-escaped text; arguments are escaped too. */
@@ -61,7 +61,6 @@ final class Messages {
             return Html.esc(PREFIX + key);
         }
         String escaped = Html.esc(t);
-        return htmlArgs.length == 0 ? escaped
-                : new MessageFormat(escaped, locale == null ? Locale.ENGLISH : locale).format(htmlArgs);
+        return htmlArgs.length == 0 ? escaped : new MessageFormat(escaped, locale).format(htmlArgs);
     }
 }

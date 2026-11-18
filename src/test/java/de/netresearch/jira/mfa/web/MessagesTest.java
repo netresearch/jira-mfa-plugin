@@ -40,7 +40,7 @@ class MessagesTest {
                 String v = p.getProperty(k);
                 assertFalse(v.isBlank(), file + " " + k + " is empty");
                 // MessageFormat drops a single apostrophe; the HTML escaping relies on plain text
-                assertFalse(v.matches(".*['<>&\"].*"), file + " " + k + " has an apostrophe or HTML character: " + v);
+                assertFalse(v.chars().anyMatch(c -> "'<>&\"".indexOf(c) >= 0), file + " " + k + " has an apostrophe or HTML character: " + v);
                 new MessageFormat(v); // throws on a broken placeholder
             }
         }
