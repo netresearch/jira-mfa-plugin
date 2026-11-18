@@ -60,15 +60,23 @@ public final class Html {
             "main:has(.wide),body:has(.wide) .topbar nav{max-width:72rem}.wide{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:0 1rem 1rem}",
             "caption{text-align:left;color:var(--muted);padding:.75rem 0}",
             ".visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}",
-            ".state-enrolment_required{color:var(--err);font-weight:600}.state-set_up{color:var(--ok)}");
+            ".state-enrolment_required{color:var(--err);font-weight:600}.state-set_up{color:var(--ok)}",
+            ".badge{display:inline-block;font-size:.8rem;font-weight:600;vertical-align:middle;padding:.1rem .5rem;border-radius:1rem;background:var(--ok);color:var(--card)}",
+            ".steps{padding-left:1.25rem}.steps li{margin:.15rem 0}",
+            "details{margin-top:1rem}summary{cursor:pointer;color:var(--accent);font-weight:600}summary:focus-visible{outline:3px solid var(--accent);outline-offset:2px}",
+            "details.card>summary{color:var(--fg)}details[open]>summary{margin-bottom:.5rem}");
 
     public static void page(HttpServletResponse resp, String title, String header, String body, String scriptUrl) throws IOException {
+        page(resp, "en", title, header, body, scriptUrl);
+    }
+
+    public static void page(HttpServletResponse resp, String lang, String title, String header, String body, String scriptUrl) throws IOException {
         resp.setContentType("text/html;charset=UTF-8");
         resp.setHeader("Cache-Control", "no-store");
         resp.setHeader("X-Frame-Options", "DENY");
         resp.setHeader("Referrer-Policy", "no-referrer");
         StringBuilder b = new StringBuilder(4096);
-        b.append("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">")
+        b.append("<!DOCTYPE html><html lang=\"").append(esc(lang)).append("\"><head><meta charset=\"utf-8\">")
                 .append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
                 .append("<meta name=\"decorator\" content=\"none\">")
                 .append("<title>").append(esc(title)).append("</title><style>").append(CSS).append("</style></head><body>")

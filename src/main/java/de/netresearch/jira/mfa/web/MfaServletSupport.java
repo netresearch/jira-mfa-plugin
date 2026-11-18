@@ -177,17 +177,22 @@ abstract class MfaServletSupport extends HttpServlet {
      * without its XSRF token.
      */
     static String header(HttpServletRequest req, ApplicationUser u, boolean backToJira) {
+        // the administration pages are English, so is their bar
+        return header(req, u, backToJira, Messages.english());
+    }
+
+    static String header(HttpServletRequest req, ApplicationUser u, boolean backToJira, Messages m) {
         String ctx = req.getContextPath();
         String xsrf = ComponentAccessor.getComponent(XsrfTokenGenerator.class).generateToken(req);
         String logout = ctx + "/logout?atl_token=" + URLEncoder.encode(xsrf, StandardCharsets.UTF_8);
         StringBuilder b = new StringBuilder("<header class=\"topbar\"><nav aria-label=\"Jira\">");
         if (backToJira) {
-            b.append("<a class=\"home\" id=\"back-to-jira\" href=\"").append(Html.esc(ctx)).append("/secure/Dashboard.jspa\">\u2190 Back to Jira</a>");
+            b.append("<a class=\"home\" id=\"back-to-jira\" href=\"").append(Html.esc(ctx)).append("/secure/Dashboard.jspa\">").append(m.html("topbar.back")).append("</a>");
         } else {
             b.append("<span class=\"home\">Jira</span>");
         }
         b.append("<span class=\"who\">").append(Html.esc(u.getDisplayName())).append("</span>")
-                .append("<a id=\"logout\" href=\"").append(Html.esc(logout)).append("\">Log out</a></nav></header>");
+                .append("<a id=\"logout\" href=\"").append(Html.esc(logout)).append("\">").append(m.html("topbar.logout")).append("</a></nav></header>");
         return b.toString();
     }
 

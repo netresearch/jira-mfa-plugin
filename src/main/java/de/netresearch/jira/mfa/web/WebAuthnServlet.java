@@ -8,6 +8,7 @@ import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
 import de.netresearch.jira.mfa.core.RequestClassifier;
 import de.netresearch.jira.mfa.service.MfaService;
 import de.netresearch.jira.mfa.service.PasskeyService;
+import de.netresearch.jira.mfa.service.PendingRequests;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -100,11 +101,23 @@ public class WebAuthnServlet extends MfaServletSupport {
                         return;
                     }
                     String authRequest = pk.startAssertion(u.getKey());
-                    MfaService.putForUser(session, MfaService.S_AUTH_REQUEST, u.getKey(), authRequest);
+                    // one request per open verify page: a second page must not replace the first one's
+                    MfaService.putForUser(session, MfaService.S_AUTH_REQUEST, u.getKey(), PendingRequests.add(
+                            MfaService.getForUser(session, MfaService.S_AUTH_REQUEST, u.getKey()), authRequest));
                     json(resp, 200, PasskeyService.requestJson(authRequest));
                     return;
                 case "/webauthn/authenticate/finish": {
-                    String stored = MfaService.takeForUser(session, MfaService.S_AUTH_REQUEST, u.getKey());
+                    String assertion = body(req);
+                    String challenge = PasskeyService.responseChallenge(assertion);
+                    String[] taken = PendingRequests.take(
+                            MfaService.getForUser(session, MfaService.S_AUTH_REQUEST, u.getKey()),
+                            request -> challenge != null && challenge.equals(requestChallengeOrNull(request)));
+                    if (taken[1] == null) {
+                        session.removeAttribute(MfaService.S_AUTH_REQUEST);
+                    } else {
+                        MfaService.putForUser(session, MfaService.S_AUTH_REQUEST, u.getKey(), taken[1]);
+                    }
+                    String stored = taken[0];
                     if (stored == null || r != Requirement.VERIFY) {
                         json(resp, 400, "{\"error\":\"no verification in progress\"}");
                         return;
@@ -116,7 +129,7 @@ public class WebAuthnServlet extends MfaServletSupport {
                     }
                     boolean ok;
                     try {
-                        ok = pk.finishAssertion(u.getKey(), stored, body(req));
+                        ok = pk.finishAssertion(u.getKey(), stored, assertion);
                     } catch (IOException | IllegalArgumentException e) {
                         // unreadable or malformed assertion: a failed attempt
                         LOG.info("passkey assertion rejected for {}: {}", u.getUsername(), e.toString());
@@ -175,6 +188,14 @@ public class WebAuthnServlet extends MfaServletSupport {
             json(resp, status, body);
         } catch (IOException e) {
             LOG.debug("could not send the WebAuthn error answer: {}", e.toString());
+        }
+    }
+
+    private static String requestChallengeOrNull(String storedRequest) {
+        try {
+            return PasskeyService.requestChallenge(storedRequest);
+        } catch (IOException | RuntimeException e) {
+            return null;
         }
     }
 

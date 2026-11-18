@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** The second step: TOTP code, recovery code or passkey. Path: /plugins/servlet/mfa/verify */
@@ -32,7 +33,7 @@ public class VerifyServlet extends MfaServletSupport {
             resp.sendRedirect(takeReturnUrl(req));
             return;
         }
-        render(req, resp, u, null);
+        render(req, resp, u, null, false);
     }
 
     @Override
@@ -53,39 +54,92 @@ public class VerifyServlet extends MfaServletSupport {
             return;
         }
         resp.setStatus(outcome == MfaService.VerifyOutcome.LOCKED ? 429 : HttpServletResponse.SC_UNAUTHORIZED);
-        render(req, resp, u, outcome == MfaService.VerifyOutcome.LOCKED ? null : "That code is not valid. Try again.");
+        render(req, resp, u, outcome == MfaService.VerifyOutcome.LOCKED ? null : "verify.badCode",
+                "recovery".equals(req.getParameter("via")));
     }
 
-    private void render(HttpServletRequest req, HttpServletResponse resp, ApplicationUser u, String error) throws IOException {
+    private void render(HttpServletRequest req, HttpServletResponse resp, ApplicationUser u, String errorKey,
+                        boolean viaRecovery) throws IOException {
+        Messages m = Messages.forCurrentUser();
         Instant locked = mfa.lockedUntil(u);
         boolean hasTotp = mfa.hasTotp(u.getKey());
         boolean hasPasskey = !mfa.store().passkeys(u.getKey()).isEmpty();
         StringBuilder b = new StringBuilder();
-        b.append("<div class=\"card\"><h1>Two-step verification</h1>")
-                .append("<p>Signed in as <strong>").append(Html.esc(u.getDisplayName())).append("</strong> (")
-                .append(Html.esc(u.getUsername())).append("). Confirm it is you to continue.</p>");
+        b.append("<div class=\"card\"><h1>").append(m.html("verify.heading")).append("</h1><p class=\"muted\">")
+                .append(m.htmlWith("verify.signedInAs", "<strong>" + Html.esc(u.getDisplayName()) + "</strong>", Html.esc(u.getUsername())))
+                .append("</p>");
         if (locked != null) {
-            b.append("<p class=\"error\" role=\"alert\">Too many failed attempts. Try again after ")
-                    .append(TIME.format(locked)).append(", or ask a Jira administrator to reset your second factor.</p>");
+            b.append("<p class=\"error\" role=\"alert\">").append(m.html("verify.locked", TIME.format(locked))).append("</p>");
         } else {
-            if (error != null) {
-                b.append("<p class=\"error\" role=\"alert\" id=\"code-error\">").append(Html.esc(error)).append("</p>");
+            if (errorKey != null) {
+                b.append("<p class=\"error\" role=\"alert\" id=\"code-error\">").append(m.html(errorKey)).append("</p>");
             }
-            if (hasPasskey) {
-                b.append("<div id=\"passkey-box\"").append(Html.dataAttrs(Map.of(
-                                "options", req.getContextPath() + SERVLET + "/webauthn/authenticate/options",
-                                "finish", req.getContextPath() + SERVLET + "/webauthn/authenticate/finish",
-                                "csrf", mfa.csrfToken(req.getSession(true)))))
-                        .append("><button type=\"button\" id=\"passkey-login\">Use a passkey or security key</button>")
-                        .append("<p class=\"error\" role=\"alert\" id=\"passkey-error\" hidden></p></div>");
-            }
-            b.append("<form method=\"post\" autocomplete=\"off\">").append(csrfField(req))
-                    .append("<label for=\"code\">").append(hasTotp ? "Code from your authenticator app, or a recovery code" : "Recovery code")
-                    .append("</label><input type=\"text\" id=\"code\" name=\"code\" inputmode=\"text\" autocomplete=\"one-time-code\" autofocus")
-                    .append(error != null ? " aria-describedby=\"code-error\" aria-invalid=\"true\"" : "")
-                    .append(" required><button type=\"submit\" id=\"verify-submit\">Verify</button></form>");
+            b.append(factorSection(req, m, hasPasskey, hasTotp, errorKey, viaRecovery));
         }
         b.append("</div>");
-        Html.page(resp, "Two-step verification", header(req, u, false), b.toString(), scriptUrl(req));
+        Html.page(resp, m.lang(), m.text("title"), header(req, u, false, m), b.toString(), scriptUrl(req));
+    }
+
+    /** The ways to confirm, the user's strongest factor first. */
+    private String factorSection(HttpServletRequest req, Messages m, boolean hasPasskey, boolean hasTotp, String errorKey,
+                                 boolean viaRecovery) {
+        StringBuilder b = new StringBuilder();
+        String codeForm = codeForm(req, m, codeLabelKey(hasPasskey, hasTotp), "code", !hasPasskey || errorKey != null, errorKey != null);
+        if (hasPasskey) {
+            b.append(passkeyBox(req, m, errorKey == null));
+            b.append("<details id=\"other-ways\"").append(errorKey != null ? " open" : "").append("><summary>")
+                    .append(m.html(hasTotp ? "verify.other" : "verify.lostPasskey")).append("</summary>")
+                    .append(codeForm).append("</details>");
+        } else {
+            // TOTP only: the code field is the main path and also takes a recovery code; after a failed
+            // recovery code, the recovery form stays open and gets the focus
+            boolean recoveryRetry = errorKey != null && viaRecovery;
+            b.append("<p>").append(m.html("verify.totp.lead")).append("</p>")
+                    .append(recoveryRetry ? codeForm(req, m, "verify.label.totp", "code", false, false) : codeForm);
+            b.append("<details id=\"other-ways\"").append(recoveryRetry ? " open" : "").append("><summary>")
+                    .append(m.html("verify.lostDevice")).append("</summary>")
+                    .append(codeForm(req, m, "verify.label.recovery", "recovery-code", recoveryRetry, recoveryRetry)).append("</details>");
+        }
+        return b.toString();
+    }
+
+    private static String codeLabelKey(boolean hasPasskey, boolean hasTotp) {
+        if (!hasPasskey) {
+            return "verify.label.totp";
+        }
+        return hasTotp ? "verify.label.totpOrRecovery" : "verify.label.recovery";
+    }
+
+    /**
+     * The main path for a user with a passkey: the prompt opens by itself (mfa.js), except after a
+     * failed code, where the user has just chosen another way.
+     */
+    private String passkeyBox(HttpServletRequest req, Messages m, boolean autostart) {
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("options", req.getContextPath() + SERVLET + "/webauthn/authenticate/options");
+        data.put("finish", req.getContextPath() + SERVLET + "/webauthn/authenticate/finish");
+        data.put("csrf", mfa.csrfToken(req.getSession(true)));
+        data.put("autostart", Boolean.toString(autostart));
+        data.put("msg-unsupported", m.text("js.unsupported"));
+        data.put("msg-waiting", m.text("verify.passkey.waiting"));
+        data.put("msg-dismissed", m.text("verify.passkey.dismissed"));
+        data.put("msg-failed", m.text("verify.passkey.failed"));
+        data.put("msg-locked", m.text("verify.passkey.locked"));
+        return "<div id=\"passkey-box\"" + Html.dataAttrs(data) + "><p>" + m.html("verify.passkey.lead") + "</p>"
+                + "<button type=\"button\" id=\"passkey-login\"" + (autostart ? " autofocus" : "") + ">"
+                + m.html("verify.passkey.button") + "</button>"
+                + "<p class=\"muted\" role=\"status\" id=\"passkey-status\"></p>"
+                + "<p class=\"error\" role=\"alert\" id=\"passkey-error\" hidden></p></div>";
+    }
+
+    private String codeForm(HttpServletRequest req, Messages m, String labelKey, String id, boolean autofocus, boolean invalid) {
+        String submit = "code".equals(id) ? "verify-submit" : id + "-submit";
+        return "<form method=\"post\" autocomplete=\"off\">" + csrfField(req)
+                + ("recovery-code".equals(id) ? Html.hidden("via", "recovery") : "")
+                + "<label for=\"" + id + "\">" + m.html(labelKey) + "</label><input type=\"text\" id=\"" + id
+                + "\" name=\"code\" inputmode=\"text\" autocomplete=\"one-time-code\""
+                + (autofocus ? " autofocus" : "")
+                + (invalid ? " aria-describedby=\"code-error\" aria-invalid=\"true\"" : "")
+                + " required><button type=\"submit\" id=\"" + submit + "\">" + m.html("verify.submit") + "</button></form>";
     }
 }
