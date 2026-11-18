@@ -74,25 +74,33 @@ public class VerifyServlet extends MfaServletSupport {
             if (errorKey != null) {
                 b.append("<p class=\"error\" role=\"alert\" id=\"code-error\">").append(m.html(errorKey)).append("</p>");
             }
-            String codeForm = codeForm(req, m, codeLabelKey(hasPasskey, hasTotp), "code", !hasPasskey || errorKey != null, errorKey != null);
-            if (hasPasskey) {
-                b.append(passkeyBox(req, m, errorKey == null));
-                b.append("<details id=\"other-ways\"").append(errorKey != null ? " open" : "").append("><summary>")
-                        .append(m.html(hasTotp ? "verify.other" : "verify.lostPasskey")).append("</summary>")
-                        .append(codeForm).append("</details>");
-            } else {
-                // TOTP only: the code field is the main path, a recovery code goes into the same field
-                // TOTP only: after a failed recovery code, that form stays open and gets the focus
-                boolean recoveryRetry = errorKey != null && viaRecovery;
-                b.append("<p>").append(m.html("verify.totp.lead")).append("</p>")
-                        .append(recoveryRetry ? codeForm(req, m, "verify.label.totp", "code", false, false) : codeForm);
-                b.append("<details id=\"other-ways\"").append(recoveryRetry ? " open" : "").append("><summary>")
-                        .append(m.html("verify.lostDevice")).append("</summary>")
-                        .append(codeForm(req, m, "verify.label.recovery", "recovery-code", recoveryRetry, recoveryRetry)).append("</details>");
-            }
+            b.append(factorSection(req, m, hasPasskey, hasTotp, errorKey, viaRecovery));
         }
         b.append("</div>");
         Html.page(resp, m.lang(), m.text("title"), header(req, u, false, m), b.toString(), scriptUrl(req));
+    }
+
+    /** The ways to confirm, the user's strongest factor first. */
+    private String factorSection(HttpServletRequest req, Messages m, boolean hasPasskey, boolean hasTotp, String errorKey,
+                                 boolean viaRecovery) {
+        StringBuilder b = new StringBuilder();
+        String codeForm = codeForm(req, m, codeLabelKey(hasPasskey, hasTotp), "code", !hasPasskey || errorKey != null, errorKey != null);
+        if (hasPasskey) {
+            b.append(passkeyBox(req, m, errorKey == null));
+            b.append("<details id=\"other-ways\"").append(errorKey != null ? " open" : "").append("><summary>")
+                    .append(m.html(hasTotp ? "verify.other" : "verify.lostPasskey")).append("</summary>")
+                    .append(codeForm).append("</details>");
+        } else {
+            // TOTP only: the code field is the main path and also takes a recovery code; after a failed
+            // recovery code, the recovery form stays open and gets the focus
+            boolean recoveryRetry = errorKey != null && viaRecovery;
+            b.append("<p>").append(m.html("verify.totp.lead")).append("</p>")
+                    .append(recoveryRetry ? codeForm(req, m, "verify.label.totp", "code", false, false) : codeForm);
+            b.append("<details id=\"other-ways\"").append(recoveryRetry ? " open" : "").append("><summary>")
+                    .append(m.html("verify.lostDevice")).append("</summary>")
+                    .append(codeForm(req, m, "verify.label.recovery", "recovery-code", recoveryRetry, recoveryRetry)).append("</details>");
+        }
+        return b.toString();
     }
 
     private static String codeLabelKey(boolean hasPasskey, boolean hasTotp) {
