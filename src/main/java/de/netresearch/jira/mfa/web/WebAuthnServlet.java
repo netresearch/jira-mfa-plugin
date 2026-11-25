@@ -5,6 +5,7 @@ import com.yubico.webauthn.exception.RegistrationFailedException;
 import de.netresearch.jira.mfa.core.AttemptLimiter;
 import de.netresearch.jira.mfa.core.LogText;
 import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
+import de.netresearch.jira.mfa.core.RelyingParties;
 import de.netresearch.jira.mfa.core.RequestClassifier;
 import de.netresearch.jira.mfa.service.MfaService;
 import de.netresearch.jira.mfa.service.PasskeyService;
@@ -100,7 +101,7 @@ public class WebAuthnServlet extends MfaServletSupport {
                         json(resp, 429, "{\"error\":\"locked\"}");
                         return;
                     }
-                    String authRequest = pk.startAssertion(u.getKey());
+                    String authRequest = pk.startAssertion(u.getKey(), RelyingParties.originHost(req.getHeader("Origin")));
                     // one request per open verify page: a second page must not replace the first one's
                     MfaService.putForUser(session, MfaService.S_AUTH_REQUEST, u.getKey(), PendingRequests.add(
                             MfaService.getForUser(session, MfaService.S_AUTH_REQUEST, u.getKey()), authRequest));

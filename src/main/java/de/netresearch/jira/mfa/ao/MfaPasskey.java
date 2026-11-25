@@ -29,6 +29,14 @@ public interface MfaPasskey extends Entity {
 
     void setCredentialId(String credentialId);
 
+    /**
+     * Relying party ID the passkey was registered under. Null for passkeys from
+     * before this column existed; see {@code MfaSettings.legacyRpId}.
+     */
+    String getRpId();
+
+    void setRpId(String rpId);
+
     /** COSE public key, base64url. */
     @NotNull
     @StringLength(StringLength.UNLIMITED)

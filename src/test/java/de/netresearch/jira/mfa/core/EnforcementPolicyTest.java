@@ -16,7 +16,7 @@ class EnforcementPolicyTest {
     private static final Instant AFTER_GRACE = SEEN.plus(Duration.ofDays(14));
 
     private static MfaSettings settings(Set<String> enforced, Set<String> exemptGroups, Set<String> exemptUsers, boolean enabled) {
-        return new MfaSettings(enabled, enforced, exemptGroups, exemptUsers, 14, MfaSettings.BasicAuthPolicy.BLOCK, Set.of(), "", "Jira", 5, 15);
+        return new MfaSettings(enabled, enforced, exemptGroups, exemptUsers, 14, MfaSettings.BasicAuthPolicy.BLOCK, Set.of(), "", Set.of(), "", "Jira", 5, 15);
     }
 
     @Test
@@ -56,14 +56,14 @@ class EnforcementPolicyTest {
 
     @Test
     void zeroGraceRequiresEnrolmentImmediately() {
-        MfaSettings s = new MfaSettings(true, Set.of(), Set.of(), Set.of(), 0, MfaSettings.BasicAuthPolicy.BLOCK, Set.of(), "", "Jira", 5, 15);
+        MfaSettings s = new MfaSettings(true, Set.of(), Set.of(), Set.of(), 0, MfaSettings.BasicAuthPolicy.BLOCK, Set.of(), "", Set.of(), "", "Jira", 5, 15);
         assertEquals(Requirement.ENROL_REQUIRED, EnforcementPolicy.evaluate(s, "a", List.of(), false, SEEN, SEEN));
     }
 
     @Test
     void basicAuthAllowList() {
         MfaSettings s = new MfaSettings(true, Set.of(), Set.of(), Set.of(), 14, MfaSettings.BasicAuthPolicy.BLOCK,
-                Set.of("Jenkins"), "", "Jira", 5, 15);
+                Set.of("Jenkins"), "", Set.of(), "", "Jira", 5, 15);
         assertEquals(true, s.isBasicAuthAllowedFor("jenkins"));
         assertEquals(false, s.isBasicAuthAllowedFor("alice"));
         assertEquals(false, MfaSettings.defaults().isBasicAuthAllowedFor(null));

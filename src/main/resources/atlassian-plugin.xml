@@ -24,6 +24,12 @@
         <dispatcher>FORWARD</dispatcher>
     </servlet-filter>
 
+    <!-- before-login: answered anonymously, before Seraph and the MFA filter -->
+    <servlet-filter key="mfa-well-known" class="de.netresearch.jira.mfa.web.WellKnownFilter" location="before-login" weight="1">
+        <url-pattern>/.well-known/webauthn</url-pattern>
+        <dispatcher>REQUEST</dispatcher>
+    </servlet-filter>
+
     <servlet key="mfa-verify" class="de.netresearch.jira.mfa.web.VerifyServlet">
         <url-pattern>/mfa/verify</url-pattern>
     </servlet>
