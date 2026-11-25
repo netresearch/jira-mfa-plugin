@@ -23,7 +23,7 @@ class BasicAuthRuleTest {
 
     private static MfaSettings settings(Set<String> basicAllowed) {
         return new MfaSettings(true, Set.of(), Set.of(), Set.of(), 14, MfaSettings.BasicAuthPolicy.BLOCK,
-                basicAllowed, "", "Jira", 5, 15);
+                basicAllowed, "", Set.of(), "", "Jira", 5, 15);
     }
 
     private static boolean basicAllowed(MfaSettings s, String user, boolean enrolled, Instant now) {
@@ -53,7 +53,7 @@ class BasicAuthRuleTest {
     @Test
     void notEnforcedUserKeepsBasic() {
         MfaSettings s = new MfaSettings(true, Set.of("staff"), Set.of(), Set.of(), 14, MfaSettings.BasicAuthPolicy.BLOCK,
-                Set.of(), "", "Jira", 5, 15);
+                Set.of(), "", Set.of(), "", "Jira", 5, 15);
         assertTrue(basicAllowed(s, "customer", false, GRACE_OVER));
     }
 }

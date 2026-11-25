@@ -22,13 +22,18 @@ public final class MfaSettings {
     public final Set<String> basicAuthAllowedUsers;
     /** WebAuthn relying party ID; empty means the host of the Jira base URL. */
     public final String rpId;
+    /** Further origins Jira is used from, normalised (see {@code RelyingParties.relatedOrigin}). */
+    public final Set<String> relatedOrigins;
+    /** Relying party ID of passkeys stored without one; empty means the current one. */
+    public final String legacyRpId;
     public final String issuer;
     public final int maxFailures;
     public final int lockoutMinutes;
 
     public MfaSettings(boolean enabled, Set<String> enforcedGroups, Set<String> exemptGroups, Set<String> exemptUsers,
                        int graceDays, BasicAuthPolicy basicAuthPolicy, Set<String> basicAuthAllowedUsers,
-                       String rpId, String issuer, int maxFailures, int lockoutMinutes) {
+                       String rpId, Set<String> relatedOrigins, String legacyRpId,
+                       String issuer, int maxFailures, int lockoutMinutes) {
         this.enabled = enabled;
         this.enforcedGroups = lower(enforcedGroups);
         this.exemptGroups = lower(exemptGroups);
@@ -37,13 +42,16 @@ public final class MfaSettings {
         this.basicAuthPolicy = basicAuthPolicy;
         this.basicAuthAllowedUsers = lower(basicAuthAllowedUsers);
         this.rpId = rpId == null ? "" : rpId.trim();
+        this.relatedOrigins = Collections.unmodifiableSet(new LinkedHashSet<>(relatedOrigins));
+        this.legacyRpId = legacyRpId == null ? "" : legacyRpId.trim();
         this.issuer = issuer == null || issuer.trim().isEmpty() ? "Jira" : issuer.trim();
         this.maxFailures = Math.max(1, maxFailures);
         this.lockoutMinutes = Math.max(1, lockoutMinutes);
     }
 
     public static MfaSettings defaults() {
-        return new MfaSettings(true, Set.of(), Set.of(), Set.of(), 14, BasicAuthPolicy.BLOCK, Set.of(), "", "Jira", 5, 15);
+        return new MfaSettings(true, Set.of(), Set.of(), Set.of(), 14, BasicAuthPolicy.BLOCK, Set.of(), "", Set.of(), "",
+                "Jira", 5, 15);
     }
 
     /** Parses a comma- or newline-separated list. */

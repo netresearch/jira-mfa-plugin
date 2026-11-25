@@ -4,9 +4,12 @@ import com.atlassian.plugin.spring.scanner.annotation.imports.ComponentImport;
 import com.atlassian.sal.api.pluginsettings.PluginSettings;
 import com.atlassian.sal.api.pluginsettings.PluginSettingsFactory;
 import de.netresearch.jira.mfa.core.MfaSettings;
+import de.netresearch.jira.mfa.core.RelyingParties;
 
 import javax.inject.Inject;
 import javax.inject.Named;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /** Reads and writes {@link MfaSettings} in Jira's global plugin settings. */
 @Named
@@ -63,6 +66,8 @@ public class SettingsStore {
                 MfaSettings.BasicAuthPolicy.valueOf(str(ps, "basicAuthPolicy", d.basicAuthPolicy.name())),
                 MfaSettings.parseList(str(ps, "basicAuthAllowedUsers", "")),
                 str(ps, "rpId", d.rpId),
+                relatedOrigins(str(ps, "relatedOrigins", "")),
+                str(ps, "legacyRpId", d.legacyRpId),
                 str(ps, "issuer", d.issuer),
                 integer(ps, "maxFailures", d.maxFailures),
                 integer(ps, "lockoutMinutes", d.lockoutMinutes));
@@ -78,11 +83,26 @@ public class SettingsStore {
         ps.put(NS + "basicAuthPolicy", s.basicAuthPolicy.name());
         ps.put(NS + "basicAuthAllowedUsers", MfaSettings.formatList(s.basicAuthAllowedUsers));
         ps.put(NS + "rpId", s.rpId);
+        ps.put(NS + "relatedOrigins", MfaSettings.formatList(s.relatedOrigins));
+        ps.put(NS + "legacyRpId", s.legacyRpId);
         ps.put(NS + "issuer", s.issuer);
         ps.put(NS + "maxFailures", Integer.toString(s.maxFailures));
         ps.put(NS + "lockoutMinutes", Integer.toString(s.lockoutMinutes));
         cached = s;
         loadedAt = System.currentTimeMillis();
+    }
+
+    /** Entries were validated when saved; one that no longer is valid is left out rather than trusted. */
+    private static Set<String> relatedOrigins(String stored) {
+        Set<String> out = new LinkedHashSet<>();
+        for (String raw : MfaSettings.parseList(stored)) {
+            try {
+                out.add(RelyingParties.relatedOrigin(raw));
+            } catch (RelyingParties.InvalidSettingException e) {
+                LOG.error("ignoring a stored related origin: {}", e.getMessage());
+            }
+        }
+        return out;
     }
 
     private static String str(PluginSettings ps, String key, String def) {

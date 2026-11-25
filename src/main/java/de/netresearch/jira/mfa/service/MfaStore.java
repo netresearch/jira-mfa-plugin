@@ -127,10 +127,12 @@ public class MfaStore {
         return Arrays.asList(ao.find(MfaPasskey.class, Query.select().where("CREDENTIAL_ID = ?", credentialId)));
     }
 
-    public void addPasskey(String userKey, String credentialId, String publicKeyCose, long signatureCount, String label, long now) {
+    public void addPasskey(String userKey, String credentialId, String rpId, String publicKeyCose, long signatureCount,
+                           String label, long now) {
         ao.executeInTransaction(() -> ao.create(MfaPasskey.class,
                 new DBParam(USER_KEY, userKey),
                 new DBParam("CREDENTIAL_ID", credentialId),
+                new DBParam("RP_ID", rpId),
                 new DBParam("PUBLIC_KEY_COSE", publicKeyCose),
                 new DBParam("SIGNATURE_COUNT", signatureCount),
                 new DBParam("LABEL", label),

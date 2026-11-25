@@ -18,7 +18,7 @@ class UserStatusTest {
     private static final List<String> STAFF = List.of("staff");
 
     private static MfaSettings settings(Set<String> enforced, Set<String> exemptGroups, Set<String> exemptUsers, boolean enabled) {
-        return new MfaSettings(enabled, enforced, exemptGroups, exemptUsers, 14, MfaSettings.BasicAuthPolicy.BLOCK, Set.of(), "", "Jira", 5, 15);
+        return new MfaSettings(enabled, enforced, exemptGroups, exemptUsers, 14, MfaSettings.BasicAuthPolicy.BLOCK, Set.of(), "", Set.of(), "", "Jira", 5, 15);
     }
 
     private static UserStatus noFactor(MfaSettings s, String user, List<String> groups, Instant firstSeen, Instant now) {

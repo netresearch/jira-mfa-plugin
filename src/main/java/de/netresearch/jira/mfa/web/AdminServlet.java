@@ -4,6 +4,7 @@ import com.atlassian.jira.user.ApplicationUser;
 import com.atlassian.plugin.spring.scanner.annotation.imports.ComponentImport;
 import com.atlassian.sal.api.websudo.WebSudoManager;
 import de.netresearch.jira.mfa.core.MfaSettings;
+import de.netresearch.jira.mfa.core.RelyingParties;
 import de.netresearch.jira.mfa.service.MfaService;
 
 import javax.inject.Inject;
@@ -59,11 +60,15 @@ public class AdminServlet extends MfaServletSupport {
                         MfaSettings.BasicAuthPolicy.valueOf(req.getParameter("basicAuthPolicy")),
                         MfaSettings.parseList(req.getParameter("basicAuthAllowedUsers")),
                         req.getParameter("rpId"),
+                        RelyingParties.relatedOrigins(MfaSettings.parseList(req.getParameter("relatedOrigins"))),
+                        RelyingParties.relyingPartyId(req.getParameter("legacyRpId")),
                         req.getParameter("issuer"),
                         Integer.parseInt(req.getParameter("maxFailures").trim()),
                         Integer.parseInt(req.getParameter("lockoutMinutes").trim()));
                 mfa.saveSettings(admin, s);
                 message = "Settings saved.";
+            } catch (RelyingParties.InvalidSettingException e) {
+                error = "Settings not saved: " + e.getMessage();
             } catch (RuntimeException e) {
                 error = "Settings not saved: check the numeric fields.";
             }
@@ -135,7 +140,9 @@ public class AdminServlet extends MfaServletSupport {
                 .append(option("ALLOW", "Allow (insecure: bypasses the second factor)", s.basicAuthPolicy == MfaSettings.BasicAuthPolicy.ALLOW))
                 .append("</select>")
                 .append(area("basicAuthAllowedUsers", "Users still allowed to use Basic authentication (service accounts)", MfaSettings.formatList(s.basicAuthAllowedUsers)))
-                .append(field("rpId", "Passkey relying party ID (empty = host of the base URL; changing it invalidates registered passkeys)", s.rpId, "text"))
+                .append(field("rpId", "Passkey relying party ID (empty = host of the base URL; applies to new passkeys; read the README before changing it or the base URL)", s.rpId, "text"))
+                .append(area("relatedOrigins", "Further origins Jira is used from (one per line, such as https://jira.example.org)", MfaSettings.formatList(s.relatedOrigins)))
+                .append(field("legacyRpId", "Relying party ID of passkeys registered before it was stored (empty = the current one)", s.legacyRpId, "text"))
                 .append(field("issuer", "Name shown in authenticator apps", s.issuer, "text"))
                 .append(field("maxFailures", "Failed attempts before lockout", Integer.toString(s.maxFailures), "number"))
                 .append(field("lockoutMinutes", "Lockout duration (minutes)", Integer.toString(s.lockoutMinutes), "number"))

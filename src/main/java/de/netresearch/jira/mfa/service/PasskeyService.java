@@ -24,6 +24,7 @@ import com.yubico.webauthn.exception.AssertionFailedException;
 import com.yubico.webauthn.exception.RegistrationFailedException;
 import de.netresearch.jira.mfa.ao.MfaPasskey;
 import de.netresearch.jira.mfa.ao.MfaUser;
+import de.netresearch.jira.mfa.core.RelyingParties;
 
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -64,24 +65,21 @@ public class PasskeyService {
         return URI.create(env.baseUrl()).getHost();
     }
 
-    public String origin() {
-        return origin(env.baseUrl());
+    /** The origins a ceremony may come from: the base URL's and the related ones. */
+    public Set<String> allowedOrigins() {
+        return RelyingParties.allowedOrigins(env.baseUrl(), settings.get().relatedOrigins);
     }
 
-    /** The browser's origin for a base URL: default ports are omitted, as browsers do. */
-    static String origin(String baseUrl) {
-        URI u = URI.create(baseUrl);
-        String scheme = u.getScheme().toLowerCase(java.util.Locale.ROOT);
-        int port = u.getPort();
-        boolean defaultPort = port < 0 || ("https".equals(scheme) && port == 443) || ("http".equals(scheme) && port == 80);
-        return scheme + "://" + u.getHost().toLowerCase(java.util.Locale.ROOT) + (defaultPort ? "" : ":" + port);
+    private String effectiveRpId(MfaPasskey p) {
+        return RelyingParties.effectiveRpId(p.getRpId(), settings.get().legacyRpId, rpId());
     }
 
-    private RelyingParty relyingParty() {
+    /** A relying party for one ceremony; it sees only passkeys of {@code rpId}. */
+    private RelyingParty relyingParty(String rpId) {
         return RelyingParty.builder()
-                .identity(RelyingPartyIdentity.builder().id(rpId()).name(settings.get().issuer).build())
-                .credentialRepository(new Repository())
-                .origins(Set.of(origin()))
+                .identity(RelyingPartyIdentity.builder().id(rpId).name(settings.get().issuer).build())
+                .credentialRepository(new Repository(rpId))
+                .origins(allowedOrigins())
                 .preferredPubkeyParams(List.of(PublicKeyCredentialParameters.ES256, PublicKeyCredentialParameters.RS256))
                 .build();
     }
@@ -104,7 +102,8 @@ public class PasskeyService {
 
     /** Starts a registration. Returns the request as stored JSON; see {@link #creationJson(String)}. */
     public String startRegistration(String userKey, String username, String displayName) {
-        PublicKeyCredentialCreationOptions options = relyingParty().startRegistration(StartRegistrationOptions.builder()
+        String rpId = rpId();
+        PublicKeyCredentialCreationOptions options = relyingParty(rpId).startRegistration(StartRegistrationOptions.builder()
                 .user(UserIdentity.builder().name(username).displayName(displayName).id(userHandle(userKey)).build())
                 .authenticatorSelection(AuthenticatorSelectionCriteria.builder()
                         .residentKey(ResidentKeyRequirement.DISCOURAGED)
@@ -115,7 +114,7 @@ public class PasskeyService {
         // The library fills excludeCredentials by the display username, but the
         // repository is keyed by the Jira user key; set it from the key, so the
         // browser refuses an authenticator that is already registered.
-        options = options.toBuilder().excludeCredentials(new Repository().getCredentialIdsForUsername(userKey)).build();
+        options = options.toBuilder().excludeCredentials(new Repository(rpId).getCredentialIdsForUsername(userKey)).build();
         try {
             return options.toJson();
         } catch (IOException e) {
@@ -131,7 +130,9 @@ public class PasskeyService {
     public void finishRegistration(String userKey, String storedRequest, String responseJson, String label)
             throws IOException, RegistrationFailedException {
         PublicKeyCredentialCreationOptions request = PublicKeyCredentialCreationOptions.fromJson(storedRequest);
-        RegistrationResult result = relyingParty().finishRegistration(FinishRegistrationOptions.builder()
+        // the ID the browser was asked for, also when the setting has changed since
+        String rpId = request.getRp().getId();
+        RegistrationResult result = relyingParty(rpId).finishRegistration(FinishRegistrationOptions.builder()
                 .request(request)
                 .response(PublicKeyCredential.parseRegistrationResponseJson(responseJson))
                 .build());
@@ -139,12 +140,17 @@ public class PasskeyService {
         if (credentialId.length() > net.java.ao.schema.StringLength.MAX_LENGTH) {
             throw new IllegalArgumentException("credential ID of " + credentialId.length() + " characters is longer than the column");
         }
-        store.addPasskey(userKey, credentialId, result.getPublicKeyCose().getBase64Url(),
+        store.addPasskey(userKey, credentialId, rpId, result.getPublicKeyCose().getBase64Url(),
                 result.getSignatureCount(), label, System.currentTimeMillis());
     }
 
-    public String startAssertion(String userKey) {
-        AssertionRequest request = relyingParty().startAssertion(StartAssertionOptions.builder()
+    /**
+     * Starts an assertion for one relying party ID of the user's passkeys.
+     * {@code requestHost} (may be null) only influences which of them.
+     */
+    public String startAssertion(String userKey, String requestHost) {
+        Set<String> ids = store.passkeys(userKey).stream().map(this::effectiveRpId).collect(Collectors.toSet());
+        AssertionRequest request = relyingParty(RelyingParties.chooseRpId(ids, requestHost, rpId())).startAssertion(StartAssertionOptions.builder()
                 .username(userKey)
                 .userVerification(UserVerificationRequirement.PREFERRED)
                 .timeout(120_000L)
@@ -179,7 +185,8 @@ public class PasskeyService {
     public boolean finishAssertion(String userKey, String storedRequest, String responseJson) throws IOException {
         AssertionRequest request = AssertionRequest.fromJson(storedRequest);
         try {
-            AssertionResult result = relyingParty().finishAssertion(FinishAssertionOptions.builder()
+            String rpId = request.getPublicKeyCredentialRequestOptions().getRpId();
+            AssertionResult result = relyingParty(rpId).finishAssertion(FinishAssertionOptions.builder()
                     .request(request)
                     .response(PublicKeyCredential.parseAssertionResponseJson(responseJson))
                     .build());
@@ -204,9 +211,20 @@ public class PasskeyService {
     }
 
     private final class Repository implements CredentialRepository {
+        private final String rpId;
+
+        Repository(String rpId) {
+            this.rpId = rpId;
+        }
+
+        private boolean belongs(MfaPasskey p) {
+            return rpId.equals(effectiveRpId(p));
+        }
+
         @Override
         public Set<PublicKeyCredentialDescriptor> getCredentialIdsForUsername(String userKey) {
             return store.passkeys(userKey).stream()
+                    .filter(this::belongs)
                     .map(p -> PublicKeyCredentialDescriptor.builder().id(b64(p.getCredentialId())).build())
                     .collect(Collectors.toSet());
         }
@@ -228,11 +246,12 @@ public class PasskeyService {
                 return Optional.empty();
             }
             return store.passkeysByCredentialId(credentialId.getBase64Url()).stream()
-                    .filter(p -> p.getUserKey().equals(owner.get()))
+                    .filter(p -> p.getUserKey().equals(owner.get()) && belongs(p))
                     .findFirst()
                     .map(p -> toRegistered(p, userHandle));
         }
 
+        /** Not limited to the relying party ID: a credential ID must be unique among all passkeys. */
         @Override
         public Set<RegisteredCredential> lookupAll(ByteArray credentialId) {
             return store.passkeysByCredentialId(credentialId.getBase64Url()).stream()

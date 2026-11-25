@@ -17,7 +17,7 @@ Built for Jira Software 9.12.3 (compiled for Java 11) and tested against it on J
 | Enforcement | Servlet filter module at `before-dispatch` on `/*`. At that point Seraph and the token filters have identified the user, so the plugin needs no change to Jira's `seraph-config.xml` (a custom Seraph authenticator would). |
 | Session state | A verified session carries the user key and the time of verification in a session attribute; the session ID is rotated on verification. Removing a factor, creating new recovery codes or an admin reset ends every other verified session of that user (the session that made the change stays verified); enrolling the first factor ends other sessions that were let through because no factor was needed. A new session, including one created by the "remember me" cookie, must verify again (tested: a request with only the remember-me cookie is sent to the plugin's page). |
 | TOTP | Codes from [java-otp](https://github.com/jchambers/java-otp); one step of clock drift either way; a code from an already used step is rejected (replay). |
-| Passkeys | [Yubico java-webauthn-server](https://github.com/Yubico/java-webauthn-server) does all parsing and signature checks. Relying party ID = host of the Jira base URL (configurable), origin = base URL. ES256 and RS256. Non-discoverable credentials, user verification preferred. |
+| Passkeys | [Yubico java-webauthn-server](https://github.com/Yubico/java-webauthn-server) does all parsing and signature checks. Relying party ID = host of the Jira base URL (configurable), stored with each passkey; allowed origins = base URL and the configured related origins. ES256 and RS256. Non-discoverable credentials, user verification preferred. |
 | Storage | Active Objects tables `AO_..._USER_STATE`, `..._PASSKEY`, `..._RECOVERY_CODE` (namespace `NRMFA`). TOTP secrets are AES-256-GCM encrypted. |
 | Encryption key | `$JIRA_HOME/data/mfa/secret.key`, created on first use with mode 600. **It is part of the backup.** Without it, every stored TOTP secret is unreadable. The plugin then does not create a new key while TOTP secrets exist: TOTP codes are refused (logged as an error), recovery codes and passkeys still work, TOTP users without either must be reset, and nobody can add an authenticator app until the file is restored or every TOTP user is reset. Restoring the right file brings TOTP back without a restart (the key is read again after a failed decryption). |
 | Recovery codes | 10 codes of 10 characters (50 bits each), stored as salted PBKDF2-HMAC-SHA256 hashes, deleted when used. Issued automatically with the first factor. |
@@ -74,7 +74,9 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 | Grace period | 14 days | Counted from the first request at which the user is enforced and has no factor. Users who become enforced later, for example when the group list is widened, get the full period from then. A grace period that has started is not restarted by leaving and re-entering an enforced group; removing one's last factor (possible only while not enforced) or an admin reset clears it, and it starts again at the next request as an enforced user. 0 = enrol at the next login. |
 | HTTP Basic authentication | Block | Block for users who have a factor or whose grace period has expired. |
 | Users still allowed to use Basic | empty | Service accounts and scripts that cannot use a token yet. `*` allows everyone. |
-| Passkey relying party ID | empty = base URL host | Changing it invalidates every registered passkey. |
+| Passkey relying party ID | empty = base URL host | Applies to new passkeys. A registered passkey keeps the ID it was registered under; see "Moving Jira to a new host name" before changing this setting or the base URL. |
+| Further origins | empty | Origins besides the base URL that Jira is used from, one per line: `https://host` or `https://host:port` (`http` only for `localhost`), without path, query, user name or wildcard. An invalid entry is refused. With at least one entry, `/.well-known/webauthn` answers the list of allowed origins without a login. |
+| Relying party ID of older passkeys | empty = the current one | The ID of passkeys registered before the plugin stored it (version 0.2.0 and older). |
 | Name shown in authenticator apps | `Jira` | Issuer in the otpauth URI. |
 | Failed attempts / lockout minutes | 5 / 15 | |
 
@@ -83,6 +85,23 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 - Users manage their factors at *Profile menu > Two-step verification* (`/plugins/servlet/mfa/setup`): add passkeys or security keys (offered first), add an authenticator app (QR code or manual key), remove factors (the last factor of an enforced user cannot be removed) and create new recovery codes.
 - A session that has not passed the second step can open the setup page only while the user has no factor at all, or while the user needs no second step (exempt, or *Active* unchecked). Otherwise somebody holding only the password could add their own authenticator. In the second case a password-only session can manage the user's factors: if the password may be known to someone else, change it and reset the user before lifting an exemption or re-activating.
 - Administrators see every user's state at *Administration > User management > Two-step verification* (`/plugins/servlet/mfa/admin/users`, system administrators, secure administrator session): must set up at the next login, grace period running (with its end), grace period not started, set up, exempt or not enforced, together with authenticator app, number of passkeys and unused recovery codes. Most urgent first; filter by state, name or email, include inactive users, download as CSV. The page starts no grace period. *Details* opens the reset page for the user.
+
+## Moving Jira to a new host name
+
+A passkey belongs to the relying party ID it was registered under, normally the old host name. Browsers with [related origin requests](https://www.w3.org/TR/webauthn-3/#sctn-related-origins) accept it on the new host as long as the old host lists the new origin at `/.well-known/webauthn`. The following steps use `jira.example.com` as the old and `jira.example.org` as the new host.
+
+1. Enter both origins, `https://jira.example.com` and `https://jira.example.org`, in *Further origins*. The base URL is always allowed as well, but after step 4 it is the new one, so the old one has to be listed. Check that `https://jira.example.com/.well-known/webauthn` answers `200`, `application/json` and both origins, without a login and without a redirect.
+2. Serve Jira on both hosts. Keep serving the old host for the whole move: **it must keep answering `/.well-known/webauthn` itself**. A redirect of the old host to the new one must exclude this path.
+3. Set *Relying party ID of older passkeys* to `jira.example.com`. Do this **before** step 4: passkeys without a stored ID otherwise count as passkeys of the new host and stop working. If that happened, setting the value brings them back.
+4. Change the base URL, or the *Passkey relying party ID*, to the new host. New passkeys are now registered for `jira.example.org`, also from the old host (through the list on the new host).
+5. Ask users to add a new passkey on the setup page. The authenticator that holds the old passkey can hold the new one too.
+6. Retire the old host when the users have done that, and remove its entry from *Further origins*.
+
+Authenticator apps (TOTP) and recovery codes do not depend on the host name; nobody loses them. A user whose only passkey belongs to the retired host signs in with a recovery code or another factor, or has to be reset by an administrator.
+
+Browser support for related origin requests: Chrome and Edge 128, Safari 18, Firefox 152. Older browsers use the old passkey on the old host only, the new passkey on the new host only. An assertion carries one relying party ID: with passkeys of several IDs the plugin asks for the one that fits the host the page was opened on, otherwise for the configured one. The page does not offer the others.
+
+Jira with a context path (`https://jira.example.com/jira`) answers at `/jira/.well-known/webauthn`. Browsers read the path at the root of the host, so the reverse proxy has to map it there, without a redirect.
 
 ## Lockout and emergencies
 
@@ -115,7 +134,7 @@ Disabling the plugin removes the second factor for everybody. Basic authenticati
 
 ## Tests
 
-- **Unit tests** (`build/mvn.sh -B test`): RFC 6238 test vectors, drift window and replay rejection, recovery code generation, normalisation and hashing, the attempt limiter (including parallel attempts), the enforcement policy, request classification (including Jira's `/s/` cache prefix), the verified-session mark, the passkey origin and the AES-GCM key handling (including a missing key file and a leftover temporary file).
+- **Unit tests** (`build/mvn.sh -B test`): RFC 6238 test vectors, drift window and replay rejection, recovery code generation, normalisation and hashing, the attempt limiter (including parallel attempts), the enforcement policy, request classification (including Jira's `/s/` cache prefix), the verified-session mark, the passkey origin and related origins, the choice of the relying party ID, complete passkey ceremonies with a software authenticator, the well-known answer, the stored settings and the AES-GCM key handling (including a missing key file and a leftover temporary file).
 - **Integration test** (`it/`) against `atlassian/jira-software:9.12.3` in Docker, driven by headless Chromium (Playwright) and `otplib` as an independent TOTP implementation:
 
 ```bash
@@ -130,6 +149,8 @@ node setup-jira.mjs <file with a timebomb licence>   # setup wizard
 ./install-plugin.sh ../target/jira-mfa-plugin-*.jar
 JIRA_ADMIN_PAT=<admin token> JIRA_RECOVERY_PASS=<secret> node e2e.mjs
 ```
+
+`related-origins.mjs` (same environment variables; needs `openssl`) serves the instance as `https://jira.example.com` and `https://jira.example.org` through a TLS proxy and covers: the well-known document (methods, path variants, anonymous and unverified session, not served by default), an invalid origin refused on the admin page, a passkey of the old host used on the new one through Chromium's related origin request, and the move including a new passkey and the choice between the two on each host. With `JIRA_UPGRADE_JAR=<jar>` the first passkey comes from the plugin version installed before.
 
 Not covered by the automated tests: the last-factor rule, exempt groups and users, two-legged OAuth, Service Management and the mobile app.
 
