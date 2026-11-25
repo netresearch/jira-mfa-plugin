@@ -62,8 +62,8 @@ async function login(page, base, u) {
   await Promise.all([page.waitForNavigation(), page.click('#login-form-submit')]);
 }
 
-// Saves plugin settings as recovery_admin and returns the page's answer.
-async function saveSettings(fields) {
+// Runs fn on the plugin's admin page as recovery_admin.
+async function onAdminPage(fn) {
   const ctx = await browser.newContext();
   const p = await ctx.newPage();
   try {
@@ -75,13 +75,19 @@ async function saveSettings(fields) {
       await Promise.all([p.waitForNavigation(), p.click('#login-form-submit')]);
       if (!p.url().includes('/mfa/admin')) await p.goto(url);
     }
-    for (const [id, value] of Object.entries(fields)) await p.fill('#' + id, value);
-    await Promise.all([p.waitForNavigation(), p.click('#save-settings')]);
-    return await p.locator('#admin-message, p.error').first().innerText();
+    return await fn(p);
   } finally {
     await ctx.close();
   }
 }
+
+// Saves plugin settings and returns the page's answer.
+const saveSettings = (fields) => onAdminPage(async (p) => {
+  for (const [id, value] of Object.entries(fields)) await p.fill('#' + id, value);
+  await Promise.all([p.waitForNavigation(), p.click('#save-settings')]);
+  return p.locator('#admin-message, p.error').first().innerText();
+});
+const knowsLegacyRpId = () => onAdminPage(async (p) => await p.locator('#legacyRpId').count() === 1);
 
 const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
 const page = await ctx.newPage();
@@ -110,6 +116,7 @@ async function addPasskey(base, label) {
 try {
   await admin('POST', '/rest/api/2/user', JSON.stringify({ name: USER.name, password: USER.pass, emailAddress: 'olga@example.com', displayName: USER.name }));
   await setBaseUrl(OLD);
+  if (UPGRADE_JAR) assert(!(await knowsLegacyRpId()), 'the installed version does not store relying party IDs');
   const cdp = await ctx.newCDPSession(page);
   await cdp.send('WebAuthn.enable');
   const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', {
@@ -121,7 +128,17 @@ try {
     console.log(execFileSync(new URL('install-plugin.sh', import.meta.url).pathname, [UPGRADE_JAR],
       { env: { ...process.env, JIRA_BASE_URL: BASE, JIRA_PAT: PAT } }).toString().trim());
     // an update to the same version reports enabled before it has happened
-    await page.waitForTimeout(15000);
+    for (let i = 0; !(await knowsLegacyRpId()); i++) {
+      if (i === 30) throw new Error('the updated plugin does not show up');
+      await page.waitForTimeout(2000);
+    }
+    await saveSettings({ legacyRpId: 'legacy.example.net' });
+    await ctx.clearCookies();
+    const [asked] = await Promise.all([
+      page.waitForResponse((r) => r.url().endsWith('/webauthn/authenticate/options')), login(page, OLD, USER)]);
+    const { rpId } = (await asked.json()).publicKey;
+    assert(rpId === 'legacy.example.net', `the passkey from before the update has no stored ID and follows the setting (${rpId})`);
+    await page.goto('about:blank');
   }
 
   await saveSettings({ relatedOrigins: '', legacyRpId: '', rpId: '' });
