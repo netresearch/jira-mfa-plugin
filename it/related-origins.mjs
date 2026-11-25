@@ -89,6 +89,15 @@ const saveSettings = (fields) => onAdminPage(async (p) => {
 });
 const knowsLegacyRpId = () => onAdminPage(async (p) => await p.locator('#legacyRpId').count() === 1);
 
+// The user's passkeys in the users overview: the table cell and the CSV row.
+const overview = () => onAdminPage(async (p) => {
+  const url = BASE + '/plugins/servlet/mfa/admin/users';
+  await p.goto(url);
+  const cell = (await p.locator(`#users tr[data-user="${USER.name}"] td`).nth(3).innerText()).trim();
+  const csv = await (await p.request.get(url + '?format=csv')).text();
+  return { cell, head: csv.split('\r\n')[0], row: csv.split('\r\n').find((l) => l.startsWith(USER.name + ',')) };
+});
+
 const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
 const page = await ctx.newPage();
 page.setDefaultTimeout(30000);
@@ -146,6 +155,9 @@ try {
   assert(await unserved(), 'without related origins the document is not served');
   const same = await passkeyLogin(OLD);
   assert(same.rpId === 'jira.example.com', 'default settings: the old host uses its own ID');
+  const before = await overview();
+  assert(before.cell === '1' && before.row.endsWith(',1,10,,jira.example.com: 1'), `the overview shows one passkey of the current ID (${JSON.stringify(before)})`);
+  assert(before.head.endsWith(',grace_period_ends,passkey_rp_ids'), 'the relying party IDs are the last CSV column');
 
   const refused = await saveSettings({ relatedOrigins: 'https://jira.example.org/jira' });
   assert(refused.includes('is not a valid related origin'), 'an origin with a path is refused: ' + refused);
@@ -191,9 +203,14 @@ try {
   await setBaseUrl(NEW);
   const moved = await passkeyLogin(NEW);
   assert(moved.rpId === 'jira.example.com', 'after the move the old passkey still works on the new host');
+  const oldOnly = await overview();
+  assert(oldOnly.cell === '1\njira.example.com: 1' && oldOnly.row.endsWith(',1,10,,jira.example.com: 1'), `the overview shows who has only an old passkey (${JSON.stringify(oldOnly)})`);
   await addPasskey(NEW, 'New host key');
   const creds = (await cdp.send('WebAuthn.getCredentials', { authenticatorId })).credentials.map((c) => c.rpId).sort();
   assert(JSON.stringify(creds) === '["jira.example.com","jira.example.org"]', 'the authenticator holds one passkey per ID: ' + creds);
+  const both = await overview();
+  assert(both.cell === '2\njira.example.com: 1, jira.example.org: 1' && both.row.endsWith(',2,10,,"jira.example.com: 1, jira.example.org: 1"'),
+    `the overview shows the passkeys of both IDs (${JSON.stringify(both)})`);
   const onNew = await passkeyLogin(NEW);
   assert(onNew.rpId === 'jira.example.org' && onNew.allowCredentials.length === 1, 'on the new host the new passkey is asked for, alone');
   const onOld = await passkeyLogin(OLD);

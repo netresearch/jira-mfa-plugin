@@ -8,6 +8,7 @@ import de.netresearch.jira.mfa.core.EnforcementPolicy;
 import de.netresearch.jira.mfa.core.EnforcementPolicy.Requirement;
 import de.netresearch.jira.mfa.core.MfaSettings;
 import de.netresearch.jira.mfa.core.RecoveryCodes;
+import de.netresearch.jira.mfa.core.RelyingParties;
 import de.netresearch.jira.mfa.core.SecretCipher;
 import de.netresearch.jira.mfa.core.Totp;
 import de.netresearch.jira.mfa.core.UserStatus;
@@ -28,6 +29,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.SortedMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Second-factor business logic shared by the filter and the servlets. */
@@ -170,10 +172,16 @@ public class MfaService {
     public static final class Overview {
         public final ApplicationUser user;
         public final UserStatus status;
+        /** Number of passkeys per effective relying party ID. */
+        public final SortedMap<String, Integer> passkeyRpIds;
+        /** True when a passkey belongs to another relying party ID than the current one. */
+        public final boolean otherRpId;
 
-        Overview(ApplicationUser user, UserStatus status) {
+        Overview(ApplicationUser user, UserStatus status, SortedMap<String, Integer> passkeyRpIds, String currentRpId) {
             this.user = user;
             this.status = status;
+            this.passkeyRpIds = passkeyRpIds;
+            this.otherRpId = passkeyRpIds.keySet().stream().anyMatch(id -> !id.equals(currentRpId));
         }
     }
 
@@ -185,8 +193,10 @@ public class MfaService {
     public List<Overview> overview(java.util.Collection<ApplicationUser> users) {
         MfaSettings s = settings.get();
         Map<String, MfaUser> rows = store.allUsers();
-        Map<String, Integer> passkeyCounts = store.passkeyCounts();
+        Map<String, List<String>> passkeyRpIds = store.passkeyRpIds();
         Map<String, Integer> codeCounts = store.recoveryCodeCounts();
+        // null when the base URL's host is no valid host name; the overview must open all the same
+        String currentRpId = nz(passkeys.rpId());
         Instant now = clock.instant();
         List<Overview> out = new ArrayList<>(users.size());
         for (ApplicationUser u : users) {
@@ -194,9 +204,10 @@ public class MfaService {
             MfaUser row = rows.get(key);
             boolean app = row != null && row.getTotpSecret() != null;
             Instant firstSeen = row != null && row.getFirstSeen() > 0 ? Instant.ofEpochMilli(row.getFirstSeen()) : null;
+            List<String> rpIds = passkeyRpIds.getOrDefault(key, List.of());
             UserStatus st = UserStatus.of(s, u.getUsername(), env.groups(u),
-                    new UserStatus.Factors(app, passkeyCounts.getOrDefault(key, 0), codeCounts.getOrDefault(key, 0)), firstSeen, now);
-            out.add(new Overview(u, st));
+                    new UserStatus.Factors(app, rpIds.size(), codeCounts.getOrDefault(key, 0)), firstSeen, now);
+            out.add(new Overview(u, st, RelyingParties.countByEffectiveRpId(rpIds, s.legacyRpId, currentRpId), currentRpId));
         }
         return out;
     }

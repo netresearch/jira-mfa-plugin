@@ -84,7 +84,7 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 
 - Users manage their factors at *Profile menu > Two-step verification* (`/plugins/servlet/mfa/setup`): add passkeys or security keys (offered first), add an authenticator app (QR code or manual key), remove factors (the last factor of an enforced user cannot be removed) and create new recovery codes.
 - A session that has not passed the second step can open the setup page only while the user has no factor at all, or while the user needs no second step (exempt, or *Active* unchecked). Otherwise somebody holding only the password could add their own authenticator. In the second case a password-only session can manage the user's factors: if the password may be known to someone else, change it and reset the user before lifting an exemption or re-activating.
-- Administrators see every user's state at *Administration > User management > Two-step verification* (`/plugins/servlet/mfa/admin/users`, system administrators, secure administrator session): must set up at the next login, grace period running (with its end), grace period not started, set up, exempt or not enforced, together with authenticator app, number of passkeys and unused recovery codes. Most urgent first; filter by state, name or email, include inactive users, download as CSV. The page starts no grace period. *Details* opens the reset page for the user.
+- Administrators see every user's state at *Administration > User management > Two-step verification* (`/plugins/servlet/mfa/admin/users`, system administrators, secure administrator session): must set up at the next login, grace period running (with its end), grace period not started, set up, exempt or not enforced, together with authenticator app, number of passkeys and unused recovery codes. Most urgent first; filter by state, name or email, include inactive users, download as CSV. When a user has a passkey of another relying party ID than the current one, the number per ID is shown as well; the CSV has it in the column `passkey_rp_ids`. A passkey without a stored ID counts under *Relying party ID of older passkeys*, else under the current ID. The page starts no grace period. *Details* opens the reset page for the user.
 
 ## Moving Jira to a new host name
 
@@ -95,7 +95,7 @@ A passkey belongs to the relying party ID it was registered under, normally the 
 3. Set *Relying party ID of older passkeys* to the old ID (`jira.example.com`). Do this **before** step 4: passkeys without a stored ID otherwise count as passkeys of the new host and stop working. If that happened, setting the value brings them back.
 4. Change the base URL to the new host, and the *Passkey relying party ID* as well if it is set: a set value wins over the base URL. New passkeys are now registered for `jira.example.org`, also from the old host (through the list on the new host).
 5. Ask users to add a new passkey on the setup page. The authenticator that holds the old passkey can hold the new one too.
-6. Retire the old host when the users have done that, and remove its entry from *Further origins*. The users overview counts passkeys without their relying party ID, so it does not show who still has only an old one. In the database, the passkey table has the ID in the column `RP_ID`; an empty value stands for *Relying party ID of older passkeys*.
+6. Retire the old host when the users have done that, and remove its entry from *Further origins*. The users overview shows who still has only old ones: after step 4 it lists the relying party IDs under the number of passkeys of every user who has one of another ID than the current one. The CSV has them for every user with a passkey, in the last column.
 
 Authenticator apps (TOTP) and recovery codes do not depend on the host name; nobody loses them. A user whose only passkey belongs to the retired host signs in with a recovery code or another factor, or has to be reset by an administrator.
 
@@ -134,7 +134,7 @@ Disabling the plugin removes the second factor for everybody. Basic authenticati
 
 ## Tests
 
-- **Unit tests** (`build/mvn.sh -B test`): RFC 6238 test vectors, drift window and replay rejection, recovery code generation, normalisation and hashing, the attempt limiter (including parallel attempts), the enforcement policy, request classification (including Jira's `/s/` cache prefix), the verified-session mark, the passkey origin and related origins, the choice of the relying party ID, complete passkey ceremonies with a software authenticator, the well-known answer, the stored settings and the AES-GCM key handling (including a missing key file and a leftover temporary file).
+- **Unit tests** (`build/mvn.sh -B test`): RFC 6238 test vectors, drift window and replay rejection, recovery code generation, normalisation and hashing, the attempt limiter (including parallel attempts), the enforcement policy, request classification (including Jira's `/s/` cache prefix), the verified-session mark, the passkey origin and related origins, the choice of the relying party ID, the relying party IDs in the users overview and its CSV, complete passkey ceremonies with a software authenticator, the well-known answer, the stored settings and the AES-GCM key handling (including a missing key file and a leftover temporary file).
 - **Integration test** (`it/`) against `atlassian/jira-software:9.12.3` in Docker, driven by headless Chromium (Playwright) and `otplib` as an independent TOTP implementation:
 
 ```bash
@@ -150,7 +150,7 @@ node setup-jira.mjs <file with a timebomb licence>   # setup wizard
 JIRA_ADMIN_PAT=<admin token> JIRA_RECOVERY_PASS=<secret> node e2e.mjs
 ```
 
-`related-origins.mjs` (same environment variables; needs `openssl`) serves the instance as `https://jira.example.com` and `https://jira.example.org` through a TLS proxy and covers: the well-known document (methods, path variants, anonymous and unverified session, not served by default), an invalid origin refused on the admin page, a passkey of the old host used on the new one through Chromium's related origin request, and the move including a new passkey and the choice between the two on each host. With `JIRA_UPGRADE_JAR=<jar>` the first passkey comes from the plugin version installed before.
+`related-origins.mjs` (same environment variables; needs `openssl`) serves the instance as `https://jira.example.com` and `https://jira.example.org` through a TLS proxy and covers: the well-known document (methods, path variants, anonymous and unverified session, not served by default), an invalid origin refused on the admin page, a passkey of the old host used on the new one through Chromium's related origin request, the move including a new passkey and the choice between the two on each host, and the relying party IDs in the users overview and its CSV. With `JIRA_UPGRADE_JAR=<jar>` the first passkey comes from the plugin version installed before.
 
 Not covered by the automated tests: the last-factor rule, exempt groups and users, two-legged OAuth, Service Management and the mobile app.
 

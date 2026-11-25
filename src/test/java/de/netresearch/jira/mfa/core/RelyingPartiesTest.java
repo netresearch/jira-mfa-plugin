@@ -5,7 +5,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -69,6 +71,14 @@ class RelyingPartiesTest {
         assertEquals(OLD, RelyingParties.effectiveRpId("", OLD, NEW), "Oracle stores an empty string as null");
         assertEquals(NEW, RelyingParties.effectiveRpId(null, "", NEW));
         assertEquals(NEW, RelyingParties.effectiveRpId(NEW, OLD, OLD), "a stored ID wins");
+    }
+
+    @Test
+    void passkeysAreCountedPerEffectiveId() {
+        assertEquals(Map.of(OLD, 2, NEW, 1), RelyingParties.countByEffectiveRpId(Arrays.asList(null, NEW, OLD), OLD, NEW));
+        assertEquals(Map.of(NEW, 3), RelyingParties.countByEffectiveRpId(Arrays.asList(null, NEW, ""), "", NEW));
+        assertEquals(List.of(OLD, NEW), List.copyOf(RelyingParties.countByEffectiveRpId(List.of(NEW, OLD), "", NEW).keySet()), "alphabetically");
+        assertEquals(Map.of(), RelyingParties.countByEffectiveRpId(List.of(), OLD, NEW));
     }
 
     @Test
