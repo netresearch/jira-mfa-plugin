@@ -48,7 +48,10 @@ class RelyingPartiesTest {
         assertEquals("", RelyingParties.relyingPartyId(null));
         assertEquals("", RelyingParties.relyingPartyId(" "));
         assertEquals(OLD, RelyingParties.relyingPartyId(" Jira.Example.com "));
-        for (String bad : List.of("https://jira.example.com", "jira.example.com:8443", "jira.example.com/", "*.example.com")) {
+        assertEquals("localhost", RelyingParties.relyingPartyId("localhost"));
+        assertEquals("a".repeat(63) + ".x-y.example.com", RelyingParties.relyingPartyId("a".repeat(63) + ".x-y.example.com"));
+        for (String bad : List.of("https://jira.example.com", "jira.example.com:8443", "jira.example.com/", "*.example.com", "jira..example.com",
+                "jira.example.com.", ".example.com", "jira-.example.com", "a".repeat(64) + ".example.com", "a.".repeat(50_000) + "a")) {
             assertThrows(InvalidSettingException.class, () -> RelyingParties.relyingPartyId(bad), bad);
         }
     }

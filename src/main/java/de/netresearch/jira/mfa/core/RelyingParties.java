@@ -2,6 +2,7 @@ package de.netresearch.jira.mfa.core;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -15,7 +16,8 @@ public final class RelyingParties {
     /** The path browsers read for WebAuthn related origin requests. */
     public static final String WELL_KNOWN_PATH = "/.well-known/webauthn";
 
-    private static final Pattern HOST = Pattern.compile("[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*");
+    private static final int MAX_HOST = 253;
+    private static final Pattern LABEL = Pattern.compile("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?");
 
     private RelyingParties() {
     }
@@ -62,10 +64,15 @@ public final class RelyingParties {
         // the comparison refuses user info, a path, a query, a fragment and an empty or zero-padded port
         boolean nothingElse = (scheme + "://" + authority).equals(raw.toLowerCase(Locale.ROOT));
         boolean portOk = u.getPort() < 0 || (u.getPort() > 0 && u.getPort() <= 65535);
-        if (!schemeOk || !nothingElse || !portOk || !HOST.matcher(host).matches()) {
+        if (!schemeOk || !nothingElse || !portOk || !isHostName(host)) {
             throw invalidOrigin(raw);
         }
         return origin(u);
+    }
+
+    /** Labels are matched one by one: a single pattern with a repeated group recurses once per label. */
+    private static boolean isHostName(String host) {
+        return host.length() <= MAX_HOST && Arrays.stream(host.split("\\.", -1)).allMatch(l -> LABEL.matcher(l).matches());
     }
 
     private static InvalidSettingException invalidOrigin(String raw) {
@@ -84,7 +91,7 @@ public final class RelyingParties {
     /** A relying party ID as entered: a host name, or empty. */
     public static String relyingPartyId(String raw) throws InvalidSettingException {
         String id = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
-        if (!id.isEmpty() && !HOST.matcher(id).matches()) {
+        if (!id.isEmpty() && !isHostName(id)) {
             throw new InvalidSettingException("\"" + raw + "\" is not a valid relying party ID. Enter a host name without scheme and port.");
         }
         return id;
