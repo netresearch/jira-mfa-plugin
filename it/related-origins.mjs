@@ -160,6 +160,8 @@ try {
     const r = await rawGet(p, { Cookie: cookie, Accept: 'text/html' });
     assert(r.status === 302 && r.headers.location.includes('/mfa/verify'), `${p} is challenged for an unverified session (HTTP ${r.status})`);
   }
+  // leave the verify page first, or its waiting prompt would be answered and log the old session in
+  await page.goto('about:blank');
   await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: true });
 
   wellKnownReads.length = 0;
@@ -182,6 +184,8 @@ try {
   console.log('ALL OK');
 } finally {
   await saveSettings({ relatedOrigins: '', legacyRpId: '', rpId: '' }).catch((e) => console.error('settings not restored: ' + e.message));
+  // a timebomb licence has 10 users, and e2e.mjs needs most of them
+  await admin('DELETE', '/rest/api/2/user?username=' + USER.name).catch((e) => console.error('user not deleted: ' + e.message));
   await setBaseUrl(BASE).catch((e) => console.error('base URL not restored: ' + e.message));
   await browser.close();
   proxy.close();
