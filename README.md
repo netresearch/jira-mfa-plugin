@@ -88,14 +88,14 @@ Host versions are pinned in `pom.xml` to what Jira 9.12.3 ships (Active Objects 
 
 ## Moving Jira to a new host name
 
-A passkey belongs to the relying party ID it was registered under, normally the old host name. Browsers with [related origin requests](https://www.w3.org/TR/webauthn-3/#sctn-related-origins) accept it on the new host as long as the old host lists the new origin at `/.well-known/webauthn`. The following steps use `jira.example.com` as the old and `jira.example.org` as the new host.
+A passkey belongs to the relying party ID it was registered under, normally the old host name. Browsers with [related origin requests](https://www.w3.org/TR/webauthn-3/#sctn-related-origins) accept it on the new host as long as the old host lists the new origin at `/.well-known/webauthn`. The following steps use `jira.example.com` as the old and `jira.example.org` as the new host, and assume that *Passkey relying party ID* is empty, so the old ID is `jira.example.com`. If it is set (for example to `example.com`), that value is the old ID: check the list in step 1 at `https://<old ID>/.well-known/webauthn`, and enter the value in step 3.
 
 1. Enter both origins, `https://jira.example.com` and `https://jira.example.org`, in *Further origins*. The base URL is always allowed as well, but after step 4 it is the new one, so the old one has to be listed. Check that `https://jira.example.com/.well-known/webauthn` answers `200`, `application/json` and both origins, without a login and without a redirect.
 2. Serve Jira on both hosts. Keep serving the old host for the whole move: **it must keep answering `/.well-known/webauthn` itself**. A redirect of the old host to the new one must exclude this path.
-3. Set *Relying party ID of older passkeys* to `jira.example.com`. Do this **before** step 4: passkeys without a stored ID otherwise count as passkeys of the new host and stop working. If that happened, setting the value brings them back.
-4. Change the base URL, or the *Passkey relying party ID*, to the new host. New passkeys are now registered for `jira.example.org`, also from the old host (through the list on the new host).
+3. Set *Relying party ID of older passkeys* to the old ID (`jira.example.com`). Do this **before** step 4: passkeys without a stored ID otherwise count as passkeys of the new host and stop working. If that happened, setting the value brings them back.
+4. Change the base URL to the new host, and the *Passkey relying party ID* as well if it is set: a set value wins over the base URL. New passkeys are now registered for `jira.example.org`, also from the old host (through the list on the new host).
 5. Ask users to add a new passkey on the setup page. The authenticator that holds the old passkey can hold the new one too.
-6. Retire the old host when the users have done that, and remove its entry from *Further origins*.
+6. Retire the old host when the users have done that, and remove its entry from *Further origins*. The users overview counts passkeys without their relying party ID, so it does not show who still has only an old one. In the database, the passkey table has the ID in the column `RP_ID`; an empty value stands for *Relying party ID of older passkeys*.
 
 Authenticator apps (TOTP) and recovery codes do not depend on the host name; nobody loses them. A user whose only passkey belongs to the retired host signs in with a recovery code or another factor, or has to be reset by an administrator.
 
