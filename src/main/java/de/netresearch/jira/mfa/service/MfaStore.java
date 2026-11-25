@@ -10,6 +10,7 @@ import net.java.ao.Query;
 
 import javax.inject.Inject;
 import javax.inject.Named;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -233,11 +234,11 @@ public class MfaStore {
         return m;
     }
 
-    /** Number of passkeys per user key, in one query. */
-    public Map<String, Integer> passkeyCounts() {
-        Map<String, Integer> m = new HashMap<>();
-        for (MfaPasskey p : ao.find(MfaPasskey.class, Query.select("ID, " + USER_KEY))) {
-            m.merge(p.getUserKey(), 1, Integer::sum);
+    /** The stored relying party ID (null if none) of every passkey per user key, in one query. */
+    public Map<String, List<String>> passkeyRpIds() {
+        Map<String, List<String>> m = new HashMap<>();
+        for (MfaPasskey p : ao.find(MfaPasskey.class, Query.select("ID, " + USER_KEY + ", RP_ID"))) {
+            m.computeIfAbsent(p.getUserKey(), k -> new ArrayList<>()).add(p.getRpId());
         }
         return m;
     }

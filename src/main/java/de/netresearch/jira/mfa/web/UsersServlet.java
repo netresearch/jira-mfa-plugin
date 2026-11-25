@@ -82,7 +82,17 @@ public class UsersServlet extends MfaServletSupport {
         return hay != null && hay.toLowerCase(Locale.ROOT).contains(needle);
     }
 
-    /** A table cell; values are numbers, dates or fixed words, so they need no escaping. */
+    /** The user's passkeys per relying party ID, such as "jira.example.com: 1, jira.example.org: 2". */
+    private static String rpIds(MfaService.Overview o) {
+        return o.passkeyRpIds.entrySet().stream().map(e -> e.getKey() + ": " + e.getValue()).collect(Collectors.joining(", "));
+    }
+
+    /** The number of passkeys, with their relying party IDs when one is not the current ID. */
+    private static String passkeys(MfaService.Overview o) {
+        return o.status.passkeys + (o.otherRpId ? "<br><span class=\"muted\">" + Html.esc(rpIds(o)) + "</span>" : "");
+    }
+
+    /** A table cell; values are numbers, dates, fixed words or escaped already. */
     private static String td(Object value) {
         return "<td>" + value + "</td>";
     }
@@ -95,7 +105,7 @@ public class UsersServlet extends MfaServletSupport {
         resp.setContentType("text/csv;charset=UTF-8");
         resp.setHeader("Content-Disposition", "attachment; filename=\"two-step-verification-users.csv\"");
         resp.setHeader("Cache-Control", "no-store");
-        StringBuilder b = new StringBuilder("username,display_name,email,active,state,authenticator_app,passkeys,recovery_codes,grace_period_ends\r\n");
+        StringBuilder b = new StringBuilder("username,display_name,email,active,state,authenticator_app,passkeys,recovery_codes,grace_period_ends,passkey_rp_ids\r\n");
         for (MfaService.Overview o : rows) {
             UserStatus st = o.status;
             b.append(UserStatus.csv(o.user.getUsername())).append(',')
@@ -106,7 +116,8 @@ public class UsersServlet extends MfaServletSupport {
                     .append(st.authenticatorApp ? "yes" : "no").append(',')
                     .append(st.passkeys).append(',')
                     .append(st.recoveryCodes).append(',')
-                    .append(graceEnd(st)).append("\r\n");
+                    .append(graceEnd(st)).append(',')
+                    .append(UserStatus.csv(rpIds(o))).append("\r\n");
         }
         resp.getWriter().write(b.toString());
     }
@@ -159,7 +170,7 @@ public class UsersServlet extends MfaServletSupport {
                     .append("<td class=\"state-").append(st.state.name().toLowerCase(Locale.ROOT)).append("\">")
                     .append(Html.esc(st.state.label())).append("</td>")
                     .append(td(st.authenticatorApp ? "yes" : "no"))
-                    .append(td(st.passkeys))
+                    .append(td(passkeys(o)))
                     .append(td(st.recoveryCodes))
                     .append(td(graceEnd(st)))
                     .append("<td><a href=\"").append(Html.esc(ctx + SERVLET + "/admin?user=" + enc)).append("\">Details</a></td></tr>");

@@ -8,6 +8,8 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
 
@@ -111,6 +113,15 @@ public final class RelyingParties {
             return stored;
         }
         return legacyRpId.isEmpty() ? currentRpId : legacyRpId;
+    }
+
+    /** Number of passkeys per effective relying party ID, alphabetically, from their stored IDs (null if none). */
+    public static SortedMap<String, Integer> countByEffectiveRpId(Collection<String> stored, String legacyRpId, String currentRpId) {
+        SortedMap<String, Integer> counts = new TreeMap<>();
+        for (String id : stored) {
+            counts.merge(effectiveRpId(id, legacyRpId, currentRpId), 1, Integer::sum);
+        }
+        return counts;
     }
 
     /** The host of an Origin header, lower case, or null. */
